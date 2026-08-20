@@ -36,3 +36,19 @@ def test_fetch_and_store_captures_error_without_raising(db_session):
     result = fetch_and_store(db_session, fake, "BTCUSDT", "1h", start_ms=0, end_ms=1)
     assert result.error == "network down"
     assert result.fetched == 0
+
+
+def test_fetch_and_store_captures_storage_error_without_raising(db_session, monkeypatch):
+    rows = [_row(datetime(2026, 1, 1, 0), "100"), _row(datetime(2026, 1, 1, 1), "160")]
+    fake = _FakeBinanceClient(rows=rows)
+    # Make upsert_klines raise an error to simulate storage-layer failure
+    monkeypatch.setattr(
+        "src.kline_fetcher.upsert_klines",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("DB constraint violation"))
+    )
+    result = fetch_and_store(db_session, fake, "BTCUSDT", "1h", start_ms=0, end_ms=1)
+    assert result.error == "DB constraint violation"
+    assert result.fetched == 0
+    assert result.inserted == 0
+    assert result.updated == 0
+    assert result.flagged == 0
