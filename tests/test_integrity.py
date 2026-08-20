@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.integrity import detect_gaps, flag_anomalies
+from src.integrity import detect_gaps, flag_anomalies, floor_to_timeframe
 
 
 def test_detect_gaps_finds_no_gap_when_complete():
@@ -53,3 +53,13 @@ def test_flag_anomalies_does_not_flag_normal_data():
     rows = [_row("100"), _row("102"), _row("99")]
     result = flag_anomalies(rows)
     assert all(row["flagged"] is False for row in result)
+
+
+def test_floor_to_timeframe_aligns_to_candle_boundary():
+    assert floor_to_timeframe(datetime(2026, 1, 1, 13, 47, 12), "1h") == datetime(2026, 1, 1, 13)
+    assert floor_to_timeframe(datetime(2026, 1, 1, 13, 47, 12), "1d") == datetime(2026, 1, 1, 0)
+
+
+def test_floor_to_timeframe_is_idempotent_on_aligned_input():
+    aligned = datetime(2026, 1, 1, 13)
+    assert floor_to_timeframe(aligned, "1h") == aligned

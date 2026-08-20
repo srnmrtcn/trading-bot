@@ -30,3 +30,18 @@ def fetch_and_store(session, binance_client, symbol: str, timeframe: str, start_
         )
     except Exception as exc:
         return FetchResult(symbol=symbol, timeframe=timeframe, fetched=0, inserted=0, updated=0, flagged=0, error=str(exc))
+
+
+def process_symbol_timeframe(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> FetchResult:
+    """Fetch-and-store one symbol/timeframe with session isolation.
+
+    ``fetch_and_store`` may fail mid-flush/commit (e.g. a DB constraint
+    violation in the storage layer), which leaves the SQLAlchemy session in a
+    pending-rollback state where every later statement fails too. Rolling back
+    here keeps one symbol's failure from poisoning the rest of the batch, so
+    every caller inherits the same isolation policy.
+    """
+    result = fetch_and_store(session, binance_client, symbol, timeframe, start_ms, end_ms)
+    if result.error:
+        session.rollback()
+    return result

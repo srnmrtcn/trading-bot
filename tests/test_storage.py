@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from src.db.models import Symbol
-from src.storage import upsert_symbols, mark_symbols_inactive, upsert_klines
+from src.storage import get_kline_time_bounds, upsert_symbols, mark_symbols_inactive, upsert_klines
 
 
 def test_upsert_symbols_inserts_new(db_session):
@@ -59,3 +59,22 @@ def test_upsert_klines_updates_existing_rows_without_duplicating(db_session):
     rows_in_db = db_session.query(Kline).filter(Kline.symbol == "BTCUSDT", Kline.timeframe == "1h").all()
     assert len(rows_in_db) == 1
     assert rows_in_db[0].close == Decimal("999")
+
+
+def test_get_kline_time_bounds_returns_none_when_no_rows(db_session):
+    assert get_kline_time_bounds(db_session, "BTCUSDT", "1h") == (None, None)
+
+
+def test_get_kline_time_bounds_returns_earliest_and_latest_open_time(db_session):
+    upsert_klines(db_session, "BTCUSDT", "1h", [
+        _row(datetime(2026, 1, 1, 3), Decimal("105")),
+        _row(datetime(2026, 1, 1, 1), Decimal("105")),
+        _row(datetime(2026, 1, 1, 2), Decimal("105")),
+    ])
+    # A different symbol/timeframe must not influence the bounds.
+    upsert_klines(db_session, "ETHUSDT", "1h", [_row(datetime(2026, 5, 1, 0), Decimal("105"))])
+    upsert_klines(db_session, "BTCUSDT", "1d", [_row(datetime(2020, 1, 1, 0), Decimal("105"))])
+
+    assert get_kline_time_bounds(db_session, "BTCUSDT", "1h") == (
+        datetime(2026, 1, 1, 1), datetime(2026, 1, 1, 3),
+    )

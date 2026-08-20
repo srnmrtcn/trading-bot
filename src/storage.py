@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.db.models import Kline, Symbol
@@ -37,6 +38,21 @@ def mark_symbols_inactive(session: Session, active_symbols: set) -> None:
         if sym.symbol not in active_symbols:
             sym.is_active = False
     session.commit()
+
+
+def get_kline_time_bounds(session: Session, symbol: str, timeframe: str) -> tuple:
+    """Return ``(earliest, latest)`` stored ``open_time`` for a symbol/timeframe.
+
+    Returns ``(None, None)`` when nothing is stored yet. This is the single
+    source of truth for "what data does this symbol/timeframe already have",
+    used both for the resume watermark and for the initial-backfill decision.
+    """
+    earliest, latest = (
+        session.query(func.min(Kline.open_time), func.max(Kline.open_time))
+        .filter(Kline.symbol == symbol, Kline.timeframe == timeframe)
+        .one()
+    )
+    return earliest, latest
 
 
 def upsert_klines(session: Session, symbol: str, timeframe: str, rows: list[dict]) -> KlineUpsertResult:

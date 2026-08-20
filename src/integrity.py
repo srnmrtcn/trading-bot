@@ -10,10 +10,24 @@ TIMEFRAME_DELTAS = {
 }
 
 
+_EPOCH = datetime(1970, 1, 1)
+
+
 @dataclass
 class Gap:
     start: datetime
     end: datetime
+
+
+def floor_to_timeframe(dt: datetime, timeframe: str) -> datetime:
+    """Round a naive UTC datetime down to the timeframe's candle boundary.
+
+    Gap detection walks a grid starting at ``range_start``; if that bound is not
+    aligned to real candle open times, every stored candle looks missing.
+    """
+    step = TIMEFRAME_DELTAS[timeframe]
+    steps = (dt - _EPOCH) // step
+    return _EPOCH + steps * step
 
 
 def detect_gaps(existing_open_times: list, timeframe: str, range_start: datetime, range_end: datetime) -> list:

@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from src.kline_fetcher import fetch_and_store
+from src.kline_fetcher import fetch_and_store, process_symbol_timeframe
 
 
 class _FakeBinanceClient:
@@ -52,3 +52,28 @@ def test_fetch_and_store_captures_storage_error_without_raising(db_session, monk
     assert result.inserted == 0
     assert result.updated == 0
     assert result.flagged == 0
+
+
+def test_process_symbol_timeframe_returns_result_on_success(db_session):
+    rows = [_row(datetime(2026, 1, 1, 0), "100")]
+    result = process_symbol_timeframe(db_session, _FakeBinanceClient(rows=rows), "BTCUSDT", "1h", 0, 1)
+    assert result.error is None
+    assert result.inserted == 1
+
+
+def test_process_symbol_timeframe_rolls_back_dirty_session_on_failure(db_session):
+    """Without the rollback the session stays in pending-rollback state and
+    every later symbol in the batch fails too."""
+    bad_row = {**_row(datetime(2026, 1, 1, 0), "100"), "close": None}  # NOT NULL violation
+    failing = _FakeBinanceClient(rows=[bad_row])
+
+    result = process_symbol_timeframe(db_session, failing, "FAILSYMBOL", "1h", 0, 1)
+    assert result.error is not None
+
+    # The session must be usable again straight away.
+    ok = process_symbol_timeframe(
+        db_session, _FakeBinanceClient(rows=[_row(datetime(2026, 1, 1, 0), "100")]),
+        "OKSYMBOL", "1h", 0, 1,
+    )
+    assert ok.error is None
+    assert ok.inserted == 1
