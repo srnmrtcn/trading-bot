@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from src.db.models import Symbol
 from src.scheduler import build_scheduler, run_timeframe_job, run_symbol_refresh_job
@@ -14,6 +15,28 @@ class _FakeBinanceClient:
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.symbols_requested.append(symbol)
+        return []
+
+
+class _PartiallyFailingBinanceClient:
+    """Returns a row for FAILSYMBOL that will blow up the DB commit inside
+    storage.upsert_klines (NOT NULL violation on `close`), leaving the
+    SQLAlchemy session dirty. All other symbols succeed with an empty batch."""
+
+    def __init__(self):
+        self.symbols_requested = []
+
+    def get_klines(self, symbol, timeframe, start_ms, end_ms):
+        self.symbols_requested.append(symbol)
+        if symbol == "FAILSYMBOL":
+            return [{
+                "open_time": datetime(2026, 1, 1, 0),
+                "open": Decimal("100"),
+                "high": Decimal("100"),
+                "low": Decimal("100"),
+                "close": None,  # violates Kline.close NOT NULL -> commit fails
+                "volume": Decimal("1000"),
+            }]
         return []
 
 
@@ -40,3 +63,19 @@ def test_run_symbol_refresh_job_upserts_symbols(db_session):
     fake_client = _FakeBinanceClient()
     run_symbol_refresh_job(session_factory=lambda: db_session, binance_client=fake_client)
     assert db_session.get(Symbol, "BTCUSDT") is not None
+
+
+def test_run_timeframe_job_isolates_symbol_failures_and_continues(db_session):
+    db_session.add(Symbol(symbol="FAILSYMBOL", base_asset="FAIL", quote_asset="USDT", is_active=True))
+    db_session.add(Symbol(symbol="OKSYMBOL", base_asset="OK", quote_asset="USDT", is_active=True))
+    db_session.commit()
+    fake_client = _PartiallyFailingBinanceClient()
+
+    # Must not raise, even though FAILSYMBOL's commit fails inside storage
+    # and would otherwise leave the session dirty for the next symbol.
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=fake_client, timeframe="1h")
+
+    assert set(fake_client.symbols_requested) == {"FAILSYMBOL", "OKSYMBOL"}
+    logs = {row.symbol: row.status for row in db_session.query(FetchLog).all()}
+    assert logs.get("OKSYMBOL") == "success"
+    assert logs.get("FAILSYMBOL") == "error"

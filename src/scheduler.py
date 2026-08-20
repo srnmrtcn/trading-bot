@@ -21,21 +21,34 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str) -> None:
         symbols = [row.symbol for row in session.query(Symbol).filter(Symbol.is_active == True).all()]  # noqa: E712
         end = datetime.now(timezone.utc).replace(tzinfo=None)
         for symbol in symbols:
-            last_success = get_last_successful_run(session, symbol, timeframe)
-            start = last_success if last_success else end - timedelta(days=730)
-            started_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            result = fetch_and_store(
-                session, binance_client, symbol, timeframe,
-                start_ms=_to_epoch_ms(start),
-                end_ms=_to_epoch_ms(end),
-            )
-            finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            record_run(
-                session, symbol, timeframe,
-                status="error" if result.error else "success",
-                started_at=started_at, finished_at=finished_at,
-                error_message=result.error,
-            )
+            try:
+                last_success = get_last_successful_run(session, symbol, timeframe)
+                start = last_success if last_success else end - timedelta(days=730)
+                started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                result = fetch_and_store(
+                    session, binance_client, symbol, timeframe,
+                    start_ms=_to_epoch_ms(start),
+                    end_ms=_to_epoch_ms(end),
+                )
+                if result.error:
+                    # fetch_and_store may have failed mid-flush/commit (e.g. a
+                    # DB constraint violation in the storage layer), which
+                    # leaves the session dirty. Roll back unconditionally so
+                    # record_run's own commit below starts from a clean
+                    # session, regardless of what kind of error occurred.
+                    session.rollback()
+                finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                record_run(
+                    session, symbol, timeframe,
+                    status="error" if result.error else "success",
+                    started_at=started_at, finished_at=finished_at,
+                    error_message=result.error,
+                )
+            except Exception:
+                # A single symbol's failure (including a failure in
+                # record_run itself) must never abort processing of the
+                # remaining symbols.
+                session.rollback()
     finally:
         session.close()
 
