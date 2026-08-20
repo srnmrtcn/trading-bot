@@ -27,11 +27,19 @@ PostgreSQL'de saklayan ve kendi bütünlüğünü doğrulayan arka plan servisi.
 python -m src.main
 ```
 
-İlk çalıştırmada: sembol listesi çekilir, `klines` tablosu boşsa son 2 yıllık
-geçmiş veri (backfill) indirilir, ardından zamanlayıcı devreye girer (1h
-mumlar için saatlik, 1d mumlar için günlük, sembol listesi için günlük).
-Servis `Ctrl+C` ile durdurulabilir; yeniden başlatıldığında `fetch_log`
-tablosuna bakarak kaldığı yerden devam eder.
+İlk çalıştırmada: sembol listesi çekilir, henüz hiç mumu olmayan her
+sembol/timeframe çifti için son 2 yıllık geçmiş veri (backfill) indirilir,
+ardından zamanlayıcı devreye girer (1h mumlar için saatlik, 1d mumlar için
+günlük, sembol listesi için günlük). Her saatlik/günlük çalıştırma, normal
+çekimden sonra son 30 günde eksik kalan mumları da otomatik olarak tamamlar.
+
+Servis `Ctrl+C` ile durdurulabilir; yeniden başlatıldığında her sembol için
+saklanan son mumdan (`MAX(klines.open_time)`) devam eder — `fetch_log` yalnızca
+izlenebilirlik/denetim içindir, çekim penceresini belirlemez.
+
+Loglar hem konsola hem de `logs/app.log` dosyasına (döngüsel, 5 MB × 5)
+yazılır; her çalıştırmanın sonunda kaç sembolün başarılı/başarısız olduğu ve
+kaç gap doldurulduğu özetlenir.
 
 ## Test
 
