@@ -15,7 +15,12 @@ class Symbol(Base):
     quote_asset = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     listed_at = Column(DateTime, nullable=True)
-    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class Kline(Base):

@@ -42,3 +42,15 @@ def test_insert_fetch_log(db_session):
     db_session.commit()
     row = db_session.query(FetchLog).first()
     assert row.status == "success"
+
+
+def test_symbol_updated_at_refreshes_on_update(db_session):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+    first = db_session.get(Symbol, "BTCUSDT").updated_at
+    assert first is not None
+
+    db_session.get(Symbol, "BTCUSDT").is_active = False
+    db_session.commit()
+
+    assert db_session.get(Symbol, "BTCUSDT").updated_at > first
