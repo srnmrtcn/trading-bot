@@ -359,6 +359,24 @@ def test_run_timeframe_job_generates_scenarios_after_1h_fetch(db_session, monkey
     assert calls == [["BTCUSDT"]]
 
 
+def test_run_timeframe_job_survives_a_scenario_generation_failure(db_session, caplog, monkeypatch):
+    """Scenario generation is downstream of the fetch: a raise from it (or from
+    its own rollback) must not escape the job or swallow the run summary."""
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    def boom(session, symbols):
+        raise RuntimeError("scenario generation exploded")
+
+    monkeypatch.setattr(scheduler_module, "run_scenario_generation", boom)
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
+
+    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled"]
+    assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
+
+
 def test_run_timeframe_job_does_not_generate_scenarios_for_1d(db_session, monkeypatch):
     db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
     db_session.commit()

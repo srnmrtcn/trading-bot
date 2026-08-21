@@ -134,7 +134,16 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
 
         scenario_result = None
         if timeframe == "1h":
-            scenario_result = run_scenario_generation(session, symbols)
+            try:
+                scenario_result = run_scenario_generation(session, symbols)
+            except Exception:
+                # Scenario generation isolates its own per-symbol failures, but
+                # a raise from the call itself (or from its rollback) would
+                # escape and swallow the run summary below. Nothing is rolled
+                # back here on purpose: session.close() in the finally block
+                # already discards the transaction, and a second rollback could
+                # raise for the same reason the first one did.
+                logger.exception("Scenario generation failed for the %s job", timeframe)
 
         if scenario_result is not None:
             logger.info(
