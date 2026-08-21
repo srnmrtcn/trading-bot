@@ -54,3 +54,21 @@ def test_symbol_updated_at_refreshes_on_update(db_session):
     db_session.commit()
 
     assert db_session.get(Symbol, "BTCUSDT").updated_at > first
+
+
+def test_symbol_updated_at_uses_naive_utc_timestamps(db_session):
+    """A tz-aware value in a naive DateTime column can shift on PostgreSQL."""
+    from src.timeutil import utc_now
+
+    # SQLAlchemy wraps zero-arg callables, so compare against the wrapped one.
+    column = Symbol.__table__.c.updated_at
+    assert column.default.arg.__wrapped__ is utc_now
+    assert column.onupdate.arg.__wrapped__ is utc_now
+
+    # What the column would actually store must be naive, at both ends.
+    assert column.default.arg(None).tzinfo is None
+    assert column.onupdate.arg(None).tzinfo is None
+
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+    assert db_session.get(Symbol, "BTCUSDT").updated_at.tzinfo is None

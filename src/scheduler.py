@@ -13,11 +13,10 @@ from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
-from src.timeutil import to_epoch_ms, utc_now
+from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
 
 logger = logging.getLogger("scheduler")
 
-DEFAULT_BACKFILL_DAYS = 730
 GAP_LOOKBACK_DAYS = 30
 
 
@@ -41,7 +40,14 @@ def get_resume_point(session, symbol: str, timeframe: str, now: datetime = None)
 
 
 def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now: datetime = None) -> int:
-    """Re-fetch missing candles in the recent window. Returns the gaps filled."""
+    """Re-fetch missing candles in the recent window.
+
+    Returns the number of gaps that were *actually* repaired — i.e. that stored
+    at least one new row. A gap Binance has no data for (an illiquid pair with
+    no trades in that interval, or an exchange halt) is permanently unfillable:
+    the fetch succeeds and returns nothing, forever. Counting those as filled
+    would report steady progress while nothing is ever stored.
+    """
     now = now if now is not None else utc_now()
     earliest, _ = get_kline_time_bounds(session, symbol, timeframe)
     if earliest is None:
@@ -59,7 +65,22 @@ def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now
         return 0
 
     results = run_gap_backfill(session, binance_client, symbol, timeframe, window_start, window_end)
-    return sum(1 for result in results if not result.error)
+
+    repaired = 0
+    for result in results:
+        if result.error:
+            # Never drop a gap-repair failure on the floor: without this, a
+            # symbol whose gap fetches always fail (e.g. a persistent 418) looks
+            # perfectly healthy in the log while self-healing is broken for it.
+            logger.error("Gap repair failed for %s %s: %s", symbol, timeframe, result.error)
+        elif result.inserted:
+            repaired += 1
+        else:
+            logger.debug(
+                "Gap repair for %s %s stored no rows — Binance has no data for that range",
+                symbol, timeframe,
+            )
+    return repaired
 
 
 def run_timeframe_job(session_factory, binance_client, timeframe: str, now: datetime = None) -> None:
@@ -71,6 +92,9 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
         failed = 0
         gaps_filled = 0
         for symbol in symbols:
+            # Decided once, after the whole per-symbol block, so a symbol can
+            # never be counted as both succeeded and failed.
+            symbol_ok = False
             try:
                 start = get_resume_point(session, symbol, timeframe, now=end)
                 started_at = utc_now()
@@ -80,10 +104,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                     end_ms=to_epoch_ms(end),
                 )
                 if result.error:
-                    failed += 1
                     logger.error("Fetch failed for %s %s: %s", symbol, timeframe, result.error)
-                else:
-                    succeeded += 1
                 record_run(
                     session, symbol, timeframe,
                     status="error" if result.error else "success",
@@ -95,15 +116,20 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                     # next run retries both, and there is no point hammering an
                     # unreachable API twice per symbol.
                     gaps_filled += repair_recent_gaps(session, binance_client, symbol, timeframe, now=end)
+                    symbol_ok = True
             except Exception:
                 # A single symbol's failure (including a failure in
                 # record_run or gap repair itself) must never abort processing
                 # of the remaining symbols. Log it here because such a failure
                 # may happen before any fetch_log row could be written, which
                 # would otherwise make it completely invisible.
-                failed += 1
                 logger.exception("Unhandled error processing %s %s", symbol, timeframe)
                 session.rollback()
+
+            if symbol_ok:
+                succeeded += 1
+            else:
+                failed += 1
         logger.info(
             "%s job finished: %d symbols succeeded, %d failed, %d gaps filled",
             timeframe, succeeded, failed, gaps_filled,

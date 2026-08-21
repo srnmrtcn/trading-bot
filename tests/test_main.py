@@ -145,3 +145,22 @@ def test_configure_logging_adds_console_and_rotating_file_handlers(tmp_path):
                 handler.close()
         root.handlers = original_handlers
         root.setLevel(original_level)
+
+
+def test_configure_logging_accepts_a_bare_filename(tmp_path, monkeypatch):
+    """os.path.dirname('app.log') is '' and makedirs('') raises."""
+    from logging.handlers import RotatingFileHandler
+
+    monkeypatch.chdir(tmp_path)
+    root = logging.getLogger()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    try:
+        main_module.configure_logging(log_file="app.log")
+        assert (tmp_path / "app.log").exists()
+    finally:
+        for handler in root.handlers:
+            if isinstance(handler, RotatingFileHandler):
+                handler.close()
+        root.handlers = original_handlers
+        root.setLevel(original_level)

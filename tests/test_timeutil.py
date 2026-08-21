@@ -18,3 +18,16 @@ def test_utc_now_is_naive_and_close_to_utc():
     assert now.tzinfo is None
     delta = abs((datetime.now(timezone.utc).replace(tzinfo=None) - now).total_seconds())
     assert delta < 5
+
+
+def test_backfill_window_has_a_single_source_of_truth():
+    """The startup backfill and the job's no-data fallback must not drift."""
+    import inspect
+
+    import src.scheduler as scheduler_module
+    from src.backfill import run_initial_backfill
+    from src.timeutil import DEFAULT_BACKFILL_DAYS
+
+    since_days_default = inspect.signature(run_initial_backfill).parameters["since_days"].default
+    assert since_days_default is DEFAULT_BACKFILL_DAYS
+    assert scheduler_module.DEFAULT_BACKFILL_DAYS is DEFAULT_BACKFILL_DAYS

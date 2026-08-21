@@ -230,3 +230,109 @@ def test_run_symbol_refresh_job_logs_and_survives_failure(db_session, caplog):
         run_symbol_refresh_job(session_factory=lambda: db_session, binance_client=_BrokenClient())
 
     assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
+
+
+class _GapServingClient:
+    """Serves candles from `available` for whatever range is requested, so gap
+    fetches behave like the real endpoint: a range Binance has no data for
+    yields an empty list rather than an error."""
+
+    def __init__(self, available, raise_for_start_ms=None):
+        self.available = set(available)
+        self.raise_for_start_ms = raise_for_start_ms
+        self.calls = []
+
+    def get_klines(self, symbol, timeframe, start_ms, end_ms):
+        self.calls.append({"start_ms": start_ms, "end_ms": end_ms})
+        if self.raise_for_start_ms is not None and start_ms == self.raise_for_start_ms:
+            raise RuntimeError("APIError(code=-1003): IP banned until 1767225600000")
+        return [
+            {"open_time": t, "open": Decimal("100"), "high": Decimal("110"),
+             "low": Decimal("90"), "close": Decimal("105"), "volume": Decimal("1000")}
+            for t in sorted(self.available)
+            if start_ms <= to_epoch_ms(t) < end_ms
+        ]
+
+
+def _seed_symbol_with_one_hour_gap(db_session):
+    """Stores h-3, h-2 and h0 for BTCUSDT, leaving h-1 missing."""
+    hour = floor_to_timeframe(utc_now(), "1h")
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    for offset in (3, 2, 0):
+        db_session.add(_kline("BTCUSDT", "1h", hour - timedelta(hours=offset)))
+    db_session.commit()
+    return hour, hour - timedelta(hours=1)
+
+
+def _summary_lines(caplog):
+    return [
+        record.getMessage() for record in caplog.records
+        if record.name == "scheduler" and "job finished" in record.getMessage()
+    ]
+
+
+def test_gap_repair_failure_is_logged_and_not_counted_as_filled(db_session, caplog):
+    """A persistently failing gap fetch must never look like a healthy run."""
+    hour, missing = _seed_symbol_with_one_hour_gap(db_session)
+    client = _GapServingClient(
+        available=[hour - timedelta(hours=n) for n in (3, 2, 1, 0)],
+        raise_for_start_ms=to_epoch_ms(missing),  # only the gap fetch fails
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="scheduler"):
+        run_timeframe_job(
+            session_factory=lambda: db_session, binance_client=client,
+            timeframe="1h", now=hour + timedelta(minutes=5),
+        )
+
+    errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
+    assert any("Gap repair failed" in message and "BTCUSDT" in message for message in errors)
+    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled"]
+
+
+def test_gaps_filled_counts_stored_rows_not_fetch_attempts(db_session, caplog):
+    """Binance returns nothing for intervals with no trades; such a gap is
+    permanently unfillable and must not be reported as repaired every hour."""
+    hour, missing = _seed_symbol_with_one_hour_gap(db_session)
+    unfillable = _GapServingClient(available=[hour - timedelta(hours=n) for n in (3, 2, 0)])
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        for _ in range(3):  # three consecutive runs, as an operator would see
+            run_timeframe_job(
+                session_factory=lambda: db_session, binance_client=unfillable,
+                timeframe="1h", now=hour + timedelta(minutes=5),
+            )
+
+    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled"] * 3
+    assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 0
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+
+
+def test_gaps_filled_counts_a_real_repair(db_session, caplog):
+    hour, missing = _seed_symbol_with_one_hour_gap(db_session)
+    client = _GapServingClient(available=[hour - timedelta(hours=n) for n in (3, 2, 1, 0)])
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(
+            session_factory=lambda: db_session, binance_client=client,
+            timeframe="1h", now=hour + timedelta(minutes=5),
+        )
+
+    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled"]
+    assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 1
+
+
+def test_run_summary_counts_each_symbol_exactly_once(db_session, caplog, monkeypatch):
+    """A failure after a successful fetch must not count the symbol twice."""
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("fetch_log write failed")
+
+    monkeypatch.setattr("src.scheduler.record_run", boom)
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
+
+    assert _summary_lines(caplog) == ["1h job finished: 0 symbols succeeded, 1 failed, 0 gaps filled"]

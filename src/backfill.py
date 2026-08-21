@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from src.db.models import Kline
 from src.integrity import TIMEFRAME_DELTAS, detect_gaps
 from src.kline_fetcher import process_symbol_timeframe
-from src.timeutil import to_epoch_ms, utc_now
+from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
 
 
-def run_initial_backfill(session, binance_client, symbols: list, timeframes: list, since_days: int = 730) -> list:
+def run_initial_backfill(session, binance_client, symbols: list, timeframes: list, since_days: int = DEFAULT_BACKFILL_DAYS) -> list:
     end = utc_now()
     start = end - timedelta(days=since_days)
     results = []

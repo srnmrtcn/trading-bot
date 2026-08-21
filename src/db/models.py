@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from sqlalchemy import Boolean, Column, DateTime, Integer, Numeric, String, Text, UniqueConstraint
 
 from src.db.base import Base
+from src.timeutil import utc_now
 
 
 class Symbol(Base):
@@ -15,12 +14,10 @@ class Symbol(Base):
     quote_asset = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
     listed_at = Column(DateTime, nullable=True)
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-    )
+    # utc_now() returns a naive UTC datetime, matching this naive DateTime
+    # column. A tz-aware value here would be converted using the server's
+    # TimeZone setting on PostgreSQL and could shift what gets stored.
+    updated_at = Column(DateTime, nullable=False, default=utc_now, onupdate=utc_now)
 
 
 class Kline(Base):

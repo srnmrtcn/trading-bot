@@ -24,7 +24,7 @@ LOG_FILE = os.path.join(LOG_DIR, "app.log")
 def configure_logging(log_file: str = None) -> None:
     """Log to console and to a rotating file, as the design spec requires."""
     log_file = log_file or LOG_FILE
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
 
     console_handler = logging.StreamHandler()
