@@ -47,7 +47,12 @@ Her saatlik (1h) mum güncellemesi tamamlandıktan hemen sonra, tüm aktif sembo
 RSI + EMA(9/21) kesişimi + hacim spike'ı sinyalleri kontrol edilir. Üçü birden aynı yönde
 tetiklenirse, en yakın destek/direnç seviyelerinden giriş/hedef/stop hesaplanıp `scenarios`
 tablosuna `status="pending"` olarak yazılır. Bir sembol için zaten `pending` bir senaryo
-varsa, süresi dolana veya güncellenene kadar yeni bir tane üretilmez.
+varsa, süresi dolana (`expires_at`) veya güncellenene kadar yeni bir tane üretilmez.
+
+Sinyaller yalnızca **kapanmış** mumlar üzerinden değerlendirilir; o an oluşmakta olan
+(yarım) mum hesaba katılmaz. Verisi bayat (bu saat çekilememiş), aralıklı (recent
+pencerede eksik mum) veya anomali işaretli (`flagged`) olan semboller o çalıştırmada
+sessizce atlanır — hata sayılmaz, sonraki saatte tekrar denenir.
 
 ## Test
 
