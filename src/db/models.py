@@ -48,3 +48,19 @@ class FetchLog(Base):
     finished_at = Column(DateTime, nullable=True)
     status = Column(String, nullable=False)
     error_message = Column(Text, nullable=True)
+
+
+class Scenario(Base):
+    __tablename__ = "scenarios"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Numeric(20, 8), nullable=False)
+    target_price = Column(Numeric(20, 8), nullable=False)
+    stop_price = Column(Numeric(20, 8), nullable=False)
+    expected_return_pct = Column(Numeric(10, 6), nullable=False)
+    confidence_score = Column(Numeric(5, 4), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="pending")

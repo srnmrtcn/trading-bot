@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from src.db.models import Symbol, Kline, FetchLog
+from src.db.models import Symbol, Kline, FetchLog, Scenario
 
 
 def test_insert_symbol(db_session):
@@ -72,3 +72,31 @@ def test_symbol_updated_at_uses_naive_utc_timestamps(db_session):
     db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
     db_session.commit()
     assert db_session.get(Symbol, "BTCUSDT").updated_at.tzinfo is None
+
+
+def test_insert_scenario(db_session):
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    db_session.add(Scenario(
+        symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), target_price=Decimal("52000"), stop_price=Decimal("49000"),
+        expected_return_pct=Decimal("0.04"), confidence_score=Decimal("0.7"),
+        created_at=now, expires_at=now + timedelta(hours=24), status="pending",
+    ))
+    db_session.commit()
+    row = db_session.query(Scenario).first()
+    assert row.symbol == "BTCUSDT"
+    assert row.direction == "long"
+    assert row.status == "pending"
+
+
+def test_scenario_status_defaults_to_pending(db_session):
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    db_session.add(Scenario(
+        symbol="ETHUSDT", direction="short",
+        entry_price=Decimal("3000"), target_price=Decimal("2900"), stop_price=Decimal("3050"),
+        expected_return_pct=Decimal("0.033"), confidence_score=Decimal("0.5"),
+        created_at=now, expires_at=now + timedelta(hours=24),
+    ))
+    db_session.commit()
+    row = db_session.query(Scenario).filter(Scenario.symbol == "ETHUSDT").first()
+    assert row.status == "pending"
