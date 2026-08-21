@@ -11,6 +11,7 @@ from src.db.models import Symbol
 from src.fetch_log import record_run
 from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
+from src.scenario_runner import run_scenario_generation
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
 from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
@@ -130,10 +131,21 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 succeeded += 1
             else:
                 failed += 1
-        logger.info(
-            "%s job finished: %d symbols succeeded, %d failed, %d gaps filled",
-            timeframe, succeeded, failed, gaps_filled,
-        )
+
+        scenario_result = None
+        if timeframe == "1h":
+            scenario_result = run_scenario_generation(session, symbols)
+
+        if scenario_result is not None:
+            logger.info(
+                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, %d scenarios generated",
+                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
+            )
+        else:
+            logger.info(
+                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled",
+                timeframe, succeeded, failed, gaps_filled,
+            )
     finally:
         session.close()
 
