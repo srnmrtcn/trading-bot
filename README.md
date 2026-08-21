@@ -41,6 +41,14 @@ Loglar hem konsola hem de `logs/app.log` dosyasına (döngüsel, 5 MB × 5)
 yazılır; her çalıştırmanın sonunda kaç sembolün başarılı/başarısız olduğu ve
 kaç gap doldurulduğu özetlenir.
 
+## Senaryo Üretimi
+
+Her saatlik (1h) mum güncellemesi tamamlandıktan hemen sonra, tüm aktif semboller için
+RSI + EMA(9/21) kesişimi + hacim spike'ı sinyalleri kontrol edilir. Üçü birden aynı yönde
+tetiklenirse, en yakın destek/direnç seviyelerinden giriş/hedef/stop hesaplanıp `scenarios`
+tablosuna `status="pending"` olarak yazılır. Bir sembol için zaten `pending` bir senaryo
+varsa, süresi dolana veya güncellenene kadar yeni bir tane üretilmez.
+
 ## Test
 
 ```bash
