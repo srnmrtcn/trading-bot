@@ -64,3 +64,5 @@ class Scenario(Base):
     created_at = Column(DateTime, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     status = Column(String, nullable=False, default="pending")
+    resolved_at = Column(DateTime, nullable=True)
+    calibrated_confidence = Column(Numeric(5, 4), nullable=True)

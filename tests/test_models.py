@@ -100,3 +100,27 @@ def test_scenario_status_defaults_to_pending(db_session):
     db_session.commit()
     row = db_session.query(Scenario).filter(Scenario.symbol == "ETHUSDT").first()
     assert row.status == "pending"
+
+
+def test_scenario_resolved_at_and_calibrated_confidence_default_to_null(db_session):
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    db_session.add(Scenario(
+        symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), target_price=Decimal("52000"), stop_price=Decimal("49000"),
+        expected_return_pct=Decimal("0.04"), confidence_score=Decimal("0.7"),
+        created_at=now, expires_at=now + timedelta(hours=24), status="pending",
+    ))
+    db_session.commit()
+    row = db_session.query(Scenario).first()
+    assert row.resolved_at is None
+    assert row.calibrated_confidence is None
+
+    row.status = "hit_target"
+    row.resolved_at = now + timedelta(hours=3)
+    row.calibrated_confidence = Decimal("0.65")
+    db_session.commit()
+
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.status == "hit_target"
+    assert reloaded.resolved_at == now + timedelta(hours=3)
+    assert reloaded.calibrated_confidence == Decimal("0.65")
