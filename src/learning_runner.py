@@ -88,3 +88,36 @@ def calibrate_scenarios(session) -> CalibrationResult:
     session.commit()
 
     return CalibrationResult(scenarios_updated=scenarios_updated, patterns_with_data=patterns_with_data)
+
+
+@dataclass
+class LearningRunResult:
+    scanned: int
+    resolved: int
+    still_pending: int
+    failed: int
+    scenarios_calibrated: int
+
+
+def run_learning_cycle(session, now: datetime = None) -> LearningRunResult:
+    now = now if now is not None else utc_now()
+    outcome_result = resolve_pending_scenarios(session, now)
+
+    scenarios_calibrated = 0
+    try:
+        calibration_result = calibrate_scenarios(session)
+        scenarios_calibrated = calibration_result.scenarios_updated
+    except Exception:
+        session.rollback()
+        logger.exception("Confidence calibration failed")
+
+    logger.info(
+        "Learning cycle finished: %d scanned, %d resolved, %d still pending, %d failed, %d scenarios calibrated",
+        outcome_result.scanned, outcome_result.resolved, outcome_result.still_pending,
+        outcome_result.failed, scenarios_calibrated,
+    )
+    return LearningRunResult(
+        scanned=outcome_result.scanned, resolved=outcome_result.resolved,
+        still_pending=outcome_result.still_pending, failed=outcome_result.failed,
+        scenarios_calibrated=scenarios_calibrated,
+    )
