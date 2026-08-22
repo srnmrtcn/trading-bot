@@ -14,9 +14,11 @@ from src.timeutil import utc_now
 logger = logging.getLogger("scenario_runner")
 
 # How many candles to *fetch*, as opposed to MIN_CANDLES ("the minimum needed
-# to evaluate a signal"). The still-forming candle is excluded from the query,
-# so fetching exactly MIN_CANDLES rows would leave zero headroom and make every
-# symbol skip forever.
+# to evaluate a signal"). The still-forming candle is excluded by the query's
+# `open_time < before` filter before LIMIT is applied, so MIN_CANDLES alone
+# already returns MIN_CANDLES closed rows when they exist. The one extra candle
+# of headroom here is a small margin for the RSI/EMA warm-up and the contiguity
+# check, not something the "skip forever" behavior depends on.
 SCENARIO_LOOKBACK = MIN_CANDLES + 1
 
 
