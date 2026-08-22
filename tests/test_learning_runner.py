@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from src.confidence_calibrator import MIN_SAMPLES
 from src.db.models import Kline, Scenario
-from src.learning_runner import resolve_pending_scenarios
+from src.learning_runner import calibrate_scenarios, resolve_pending_scenarios
 
 
 def _pending_scenario(symbol="BTCUSDT", direction="long", created_at=None, expires_at=None):
@@ -102,3 +103,59 @@ def test_resolve_pending_scenarios_isolates_a_failing_scenario(db_session, monke
     assert result.failed == 1  # ETHUSDT, no klines -> triggers the flaky raise
     reloaded_good = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
     assert reloaded_good.status == "hit_target"
+
+
+def _resolved_scenario(symbol, direction, confidence_score, status):
+    now = datetime(2026, 1, 1)
+    return Scenario(
+        symbol=symbol, direction=direction,
+        entry_price=Decimal("100"), target_price=Decimal("110"), stop_price=Decimal("90"),
+        expected_return_pct=Decimal("0.1"), confidence_score=confidence_score,
+        created_at=now, expires_at=now + timedelta(hours=24),
+        status=status, resolved_at=now + timedelta(hours=3),
+        calibrated_confidence=confidence_score,  # already calibrated when it was created
+    )
+
+
+def test_calibrate_scenarios_falls_back_to_raw_score_below_min_samples(db_session):
+    pending = _pending_scenario(symbol="BTCUSDT", direction="long")
+    pending.confidence_score = Decimal("0.65")
+    db_session.add(pending)
+    db_session.commit()
+
+    result = calibrate_scenarios(db_session)
+
+    assert result.scenarios_updated == 1
+    assert result.patterns_with_data == 0
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.calibrated_confidence == Decimal("0.65")
+
+
+def test_calibrate_scenarios_uses_computed_rate_at_min_samples(db_session):
+    for _ in range(15):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_target"))
+    for _ in range(5):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_stop"))
+    pending = _pending_scenario(symbol="BTCUSDT", direction="long")
+    pending.confidence_score = Decimal("0.65")
+    db_session.add(pending)
+    db_session.commit()
+
+    result = calibrate_scenarios(db_session)
+
+    assert result.patterns_with_data == 1
+    reloaded = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
+    assert reloaded.calibrated_confidence == Decimal("15") / Decimal("20")
+
+
+def test_calibrate_scenarios_does_not_touch_already_calibrated_rows(db_session):
+    already = _resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_target")
+    already.calibrated_confidence = Decimal("0.42")
+    db_session.add(already)
+    db_session.commit()
+
+    result = calibrate_scenarios(db_session)
+
+    assert result.scenarios_updated == 0
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.calibrated_confidence == Decimal("0.42")

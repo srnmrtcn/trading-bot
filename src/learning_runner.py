@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.confidence_calibrator import compute_success_rates, confidence_bucket
 from src.db.models import Kline, Scenario
 from src.integrity import floor_to_timeframe
 from src.outcome_evaluator import evaluate_outcome
@@ -61,3 +62,29 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
             failed += 1
 
     return OutcomeResolutionResult(scanned=scanned, resolved=resolved, still_pending=still_pending, failed=failed)
+
+
+@dataclass
+class CalibrationResult:
+    scenarios_updated: int
+    patterns_with_data: int
+
+
+def calibrate_scenarios(session) -> CalibrationResult:
+    resolved_records = [
+        (row.direction, row.confidence_score, row.status)
+        for row in session.query(Scenario).filter(Scenario.status != "pending").all()
+    ]
+    rates = compute_success_rates(resolved_records)
+    patterns_with_data = sum(1 for rate, _count in rates.values() if rate is not None)
+
+    targets = session.query(Scenario).filter(Scenario.calibrated_confidence.is_(None)).all()
+    scenarios_updated = 0
+    for scenario in targets:
+        key = (scenario.direction, confidence_bucket(scenario.confidence_score))
+        rate, _count = rates.get(key, (None, 0))
+        scenario.calibrated_confidence = rate if rate is not None else scenario.confidence_score
+        scenarios_updated += 1
+    session.commit()
+
+    return CalibrationResult(scenarios_updated=scenarios_updated, patterns_with_data=patterns_with_data)
