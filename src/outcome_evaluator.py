@@ -29,6 +29,10 @@ def evaluate_outcome(
         # scenario. Without this bound, a window that reaches past expires_at —
         # normal after an outage, when one pass scans the whole backfilled gap —
         # would mark a long-dead scenario hit_target on a candle from days later.
+        # The bound is candle granularity, not the exact expiry instant: a
+        # candle that opens before expires_at is read in full, so a touch it
+        # recorded may technically have happened minutes after expiry. Assume no
+        # more precision than that — intra-candle timing is not stored.
         if kline["open_time"] >= expires_at:
             break
 

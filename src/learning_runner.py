@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.confidence_calibrator import compute_success_rates, confidence_bucket
 from src.db.models import Kline, Scenario
@@ -28,11 +28,12 @@ class OutcomeResolutionResult:
 def _load_resolution_window(session, symbol: str, timeframe: str, since: datetime, until: datetime) -> list:
     """A scenario's candles: `since` (inclusive) through `until` (exclusive).
 
-    `until` is the scenario's `expires_at`. Bounding the query there means the
-    caller can never hand `evaluate_outcome` a candle from after the scenario
-    expired — after an outage a single pass can otherwise span the whole
-    backfilled window — and it keeps the contiguity check below scoped to the
-    candles the outcome actually depends on.
+    `until` is the scenario's expiry, or the boundary just past the still-forming
+    candle, whichever comes first (see `_resolution_window_end`). Bounding the
+    query at expiry means the caller can never hand `evaluate_outcome` a candle
+    from after the scenario expired — after an outage a single pass can
+    otherwise span the whole backfilled window — and the same bound scopes the
+    completeness check below to the candles the outcome actually depends on.
 
     The still-forming candle IS included, deliberately: the high/low it has
     printed so far is real, observed price action, and "has price touched target
@@ -59,20 +60,47 @@ def _load_resolution_window(session, symbol: str, timeframe: str, since: datetim
     return [{"open_time": row.open_time, "high": row.high, "low": row.low} for row in rows]
 
 
-def _has_gap(klines: list, timeframe: str) -> bool:
-    """Is this window missing candles in the middle?
+def _resolution_window_end(expires_at: datetime, timeframe: str, now: datetime) -> datetime:
+    """The exclusive end of the window that *can* be observed right now.
 
-    Subsystem A tolerates permanently unfillable gaps, so a stored window can
-    skip hours. The true high/low during a missing candle is unknown, and it
-    could have touched the target, the stop, or neither — so any answer derived
-    from a gapped window is a guess dressed up as a resolution. Same span check
-    `scenario_runner._window_rejection` uses; the unique constraint on
-    (symbol, timeframe, open_time) rules out duplicates skewing it.
+    Two bounds, whichever binds first: the scenario's expiry (price action after
+    it is not the scenario's to claim) and the boundary just past the candle
+    currently forming (nothing later has opened yet). Using this for both the
+    query and the completeness check is what stops a scenario that is simply not
+    due for its next candle from being mistaken for one with missing data.
     """
-    if len(klines) < 2:
-        return False
     step = TIMEFRAME_DELTAS[timeframe]
-    return klines[-1]["open_time"] - klines[0]["open_time"] != (len(klines) - 1) * step
+    return min(expires_at, floor_to_timeframe(now, timeframe) + step)
+
+
+def _missing_candle_count(klines: list, timeframe: str, since: datetime, until: datetime) -> int:
+    """How many candles this window should hold but does not.
+
+    Subsystem A tolerates permanently unfillable gaps, so a stored window can be
+    missing hours. The true high/low during a missing candle is unknown — it
+    could have touched the target, the stop, or neither — so any outcome derived
+    from an incomplete window is a guess dressed up as a resolution.
+
+    Counted against the expected grid rather than measured as the span between
+    the first and last stored candle. A span check only ever sees holes
+    *between* stored rows, and silently accepts three windows that are just as
+    underivable: one missing its start (the scenario was created as an outage
+    began, so an early stop-out is invisible), one missing its end (a tail
+    outage, whose unobserved hours would be scored `expired` — a false miss fed
+    straight into the calibration pool), and one that is empty altogether. The
+    count subsumes the span check: an interior hole is a missing candle too.
+
+    The unique constraint on (symbol, timeframe, open_time) rules out duplicates
+    inflating the stored count.
+    """
+    step = TIMEFRAME_DELTAS[timeframe]
+    span = until - since
+    if span <= timedelta(0):
+        return 0
+    expected = span // step
+    if expected * step < span:
+        expected += 1  # a partial trailing step still means one more candle
+    return max(expected - len(klines), 0)
 
 
 def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutionResult:
@@ -94,17 +122,17 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
         symbol = scenario.symbol
         try:
             since = floor_to_timeframe(scenario.created_at, RESOLUTION_TIMEFRAME)
-            klines = _load_resolution_window(
-                session, symbol, RESOLUTION_TIMEFRAME, since, scenario.expires_at,
-            )
-            if _has_gap(klines, RESOLUTION_TIMEFRAME):
+            until = _resolution_window_end(scenario.expires_at, RESOLUTION_TIMEFRAME, now)
+            klines = _load_resolution_window(session, symbol, RESOLUTION_TIMEFRAME, since, until)
+            missing = _missing_candle_count(klines, RESOLUTION_TIMEFRAME, since, until)
+            if missing:
                 # A normal deferral, not an error: it stays pending and is
                 # retried next run, exactly like the still_pending bucket's
                 # other members. Logged at INFO because a window that never
-                # becomes contiguous means this scenario is silently stuck.
+                # fills in means this scenario is silently stuck.
                 logger.info(
-                    "Deferring scenario %s (%s): non-contiguous candle window (gap in recent history)",
-                    scenario_id, symbol,
+                    "Deferring scenario %s (%s): %d candle(s) missing from its resolution window",
+                    scenario_id, symbol, missing,
                 )
                 still_pending += 1
                 continue
