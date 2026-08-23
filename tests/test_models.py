@@ -124,3 +124,43 @@ def test_scenario_resolved_at_and_calibrated_confidence_default_to_null(db_sessi
     assert reloaded.status == "hit_target"
     assert reloaded.resolved_at == now + timedelta(hours=3)
     assert reloaded.calibrated_confidence == Decimal("0.65")
+
+
+def test_paper_position_defaults_and_unique_scenario_constraint(db_session):
+    from src.db.models import PaperPosition
+
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    scenario = Scenario(
+        symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), target_price=Decimal("52000"), stop_price=Decimal("49000"),
+        expected_return_pct=Decimal("0.04"), confidence_score=Decimal("0.7"),
+        created_at=now, expires_at=now + timedelta(hours=24), status="pending",
+    )
+    db_session.add(scenario)
+    db_session.commit()
+
+    db_session.add(PaperPosition(
+        scenario_id=scenario.id, symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), stop_price=Decimal("49000"), target_price=Decimal("52000"),
+        risk_amount=Decimal("100"), position_size=Decimal("0.1"),
+        opened_at=now, status="open",
+    ))
+    db_session.commit()
+
+    reloaded = db_session.query(PaperPosition).first()
+    assert reloaded.status == "open"
+    assert reloaded.closed_at is None
+    assert reloaded.exit_price is None
+    assert reloaded.realized_pnl is None
+    assert reloaded.equity_before is None
+    assert reloaded.equity_after is None
+
+    db_session.add(PaperPosition(
+        scenario_id=scenario.id, symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), stop_price=Decimal("49000"), target_price=Decimal("52000"),
+        risk_amount=Decimal("100"), position_size=Decimal("0.1"),
+        opened_at=now, status="open",
+    ))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()

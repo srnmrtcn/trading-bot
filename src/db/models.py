@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 
 from src.db.base import Base
 from src.timeutil import utc_now
@@ -66,3 +66,24 @@ class Scenario(Base):
     status = Column(String, nullable=False, default="pending")
     resolved_at = Column(DateTime, nullable=True)
     calibrated_confidence = Column(Numeric(5, 4), nullable=True)
+
+
+class PaperPosition(Base):
+    __tablename__ = "paper_positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False, unique=True)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Numeric(20, 8), nullable=False)
+    stop_price = Column(Numeric(20, 8), nullable=False)
+    target_price = Column(Numeric(20, 8), nullable=False)
+    risk_amount = Column(Numeric(20, 8), nullable=False)
+    position_size = Column(Numeric(20, 8), nullable=False)
+    opened_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="open")
+    closed_at = Column(DateTime, nullable=True)
+    exit_price = Column(Numeric(20, 8), nullable=True)
+    realized_pnl = Column(Numeric(20, 8), nullable=True)
+    equity_before = Column(Numeric(20, 8), nullable=True)
+    equity_after = Column(Numeric(20, 8), nullable=True)
