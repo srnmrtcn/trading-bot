@@ -307,8 +307,8 @@ def test_resolve_pending_scenarios_isolates_a_failing_scenario(db_session, monke
     result = resolve_pending_scenarios(db_session, now=datetime(2026, 1, 1, 11, 5, 0))
 
     assert result.scanned == 2
-    assert result.resolved == 1  # BTCUSDT, has klines
-    assert result.failed == 1  # ETHUSDT, no klines -> triggers the flaky raise
+    assert result.resolved == 1  # BTCUSDT
+    assert result.failed == 1  # ETHUSDT, target_price == 999 triggers the flaky raise
     reloaded_good = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
     assert reloaded_good.status == "hit_target"
 
