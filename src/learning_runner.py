@@ -6,11 +6,15 @@ from datetime import datetime
 
 from src.confidence_calibrator import compute_success_rates, confidence_bucket
 from src.db.models import Kline, Scenario
-from src.integrity import floor_to_timeframe
+from src.integrity import TIMEFRAME_DELTAS, floor_to_timeframe
 from src.outcome_evaluator import evaluate_outcome
 from src.timeutil import utc_now
 
 logger = logging.getLogger("learning_runner")
+
+# Subsystem B only ever writes 1h scenarios, and outcomes are resolved on the
+# same candles the signal was read from.
+RESOLUTION_TIMEFRAME = "1h"
 
 
 @dataclass
@@ -21,14 +25,54 @@ class OutcomeResolutionResult:
     failed: int
 
 
-def _load_klines_since(session, symbol: str, timeframe: str, since: datetime) -> list:
+def _load_resolution_window(session, symbol: str, timeframe: str, since: datetime, until: datetime) -> list:
+    """A scenario's candles: `since` (inclusive) through `until` (exclusive).
+
+    `until` is the scenario's `expires_at`. Bounding the query there means the
+    caller can never hand `evaluate_outcome` a candle from after the scenario
+    expired — after an outage a single pass can otherwise span the whole
+    backfilled window — and it keeps the contiguity check below scoped to the
+    candles the outcome actually depends on.
+
+    The still-forming candle IS included, deliberately: the high/low it has
+    printed so far is real, observed price action, and "has price touched target
+    or stop yet" is a fair question to ask of it. This is the opposite of
+    `scenario_runner._load_recent_klines`, which excludes it because a partial
+    candle's volume and close distort *indicator* inputs — a different concern.
+    Don't "fix" this into matching Subsystem B.
+
+    Anomaly-flagged candles (zero volume, a >50% move) are included for the same
+    reason: flagged means "don't trust this as an indicator input", not "this
+    price never happened". A level that a flagged candle reached was reached.
+    """
     rows = (
         session.query(Kline)
-        .filter(Kline.symbol == symbol, Kline.timeframe == timeframe, Kline.open_time >= since)
+        .filter(
+            Kline.symbol == symbol,
+            Kline.timeframe == timeframe,
+            Kline.open_time >= since,
+            Kline.open_time < until,
+        )
         .order_by(Kline.open_time.asc())
         .all()
     )
     return [{"open_time": row.open_time, "high": row.high, "low": row.low} for row in rows]
+
+
+def _has_gap(klines: list, timeframe: str) -> bool:
+    """Is this window missing candles in the middle?
+
+    Subsystem A tolerates permanently unfillable gaps, so a stored window can
+    skip hours. The true high/low during a missing candle is unknown, and it
+    could have touched the target, the stop, or neither — so any answer derived
+    from a gapped window is a guess dressed up as a resolution. Same span check
+    `scenario_runner._window_rejection` uses; the unique constraint on
+    (symbol, timeframe, open_time) rules out duplicates skewing it.
+    """
+    if len(klines) < 2:
+        return False
+    step = TIMEFRAME_DELTAS[timeframe]
+    return klines[-1]["open_time"] - klines[0]["open_time"] != (len(klines) - 1) * step
 
 
 def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutionResult:
@@ -41,9 +85,29 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
     failed = 0
     for scenario in pending:
         scanned += 1
+        # Captured before the try block, on purpose. After session.rollback()
+        # these attributes are expired, so reading them in the except handler
+        # would issue a refresh SELECT — which raises again if the failure was a
+        # dead connection, taking the log line and every remaining scenario's
+        # isolation down with it.
+        scenario_id = scenario.id
+        symbol = scenario.symbol
         try:
-            since = floor_to_timeframe(scenario.created_at, "1h")
-            klines = _load_klines_since(session, scenario.symbol, "1h", since)
+            since = floor_to_timeframe(scenario.created_at, RESOLUTION_TIMEFRAME)
+            klines = _load_resolution_window(
+                session, symbol, RESOLUTION_TIMEFRAME, since, scenario.expires_at,
+            )
+            if _has_gap(klines, RESOLUTION_TIMEFRAME):
+                # A normal deferral, not an error: it stays pending and is
+                # retried next run, exactly like the still_pending bucket's
+                # other members. Logged at INFO because a window that never
+                # becomes contiguous means this scenario is silently stuck.
+                logger.info(
+                    "Deferring scenario %s (%s): non-contiguous candle window (gap in recent history)",
+                    scenario_id, symbol,
+                )
+                still_pending += 1
+                continue
             outcome = evaluate_outcome(
                 scenario.direction, scenario.target_price, scenario.stop_price,
                 scenario.expires_at, klines, now,
@@ -58,7 +122,7 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
                 still_pending += 1
         except Exception:
             session.rollback()
-            logger.exception("Outcome resolution failed for scenario %s (%s)", scenario.id, scenario.symbol)
+            logger.exception("Outcome resolution failed for scenario %s (%s)", scenario_id, symbol)
             failed += 1
 
     return OutcomeResolutionResult(scanned=scanned, resolved=resolved, still_pending=still_pending, failed=failed)
@@ -101,8 +165,15 @@ class LearningRunResult:
 
 def run_learning_cycle(session, now: datetime = None) -> LearningRunResult:
     now = now if now is not None else utc_now()
-    outcome_result = resolve_pending_scenarios(session, now)
 
+    # Calibration runs BEFORE resolution, so a scenario is only ever scored
+    # against outcomes that were already known when it was scored. Resolving
+    # first lets a scenario that resolves in this very run — reachable, since
+    # the still-forming candle is in scope — land in the pool its own
+    # calibrated_confidence is computed from, which turns a prediction into a
+    # partly post-hoc score. Subsystem D will read this field as a *predictive*
+    # signal. Scenarios Subsystem B created minutes ago in the same job are
+    # still calibrated in this same run, so nothing is left uncalibrated.
     scenarios_calibrated = 0
     try:
         calibration_result = calibrate_scenarios(session)
@@ -110,6 +181,15 @@ def run_learning_cycle(session, now: datetime = None) -> LearningRunResult:
     except Exception:
         session.rollback()
         logger.exception("Confidence calibration failed")
+
+    # Each half is wrapped separately: neither failing may stop the other from
+    # running, nor swallow the summary below.
+    outcome_result = OutcomeResolutionResult(scanned=0, resolved=0, still_pending=0, failed=0)
+    try:
+        outcome_result = resolve_pending_scenarios(session, now)
+    except Exception:
+        session.rollback()
+        logger.exception("Outcome resolution failed")
 
     logger.info(
         "Learning cycle finished: %d scanned, %d resolved, %d still pending, %d failed, %d scenarios calibrated",

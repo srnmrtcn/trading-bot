@@ -78,6 +78,80 @@ def test_resolve_pending_scenarios_marks_expired(db_session):
     assert reloaded.resolved_at == datetime(2026, 1, 2, 10, 5, 0)
 
 
+def test_resolve_pending_scenarios_ignores_candles_after_expiry(db_session):
+    """A candle from after expires_at must never resolve a scenario as a win.
+
+    Without an upper bound on the resolution window, a single pass over a
+    backfilled outage gap would report this as hit_target a week late.
+    """
+    scenario = _pending_scenario(
+        created_at=datetime(2026, 1, 1, 10, 5, 0),
+        expires_at=datetime(2026, 1, 1, 16, 5, 0),
+    )
+    db_session.add(scenario)
+    # Flat candles from creation through past expiry: neither target nor stop.
+    for hour in range(10, 18):
+        db_session.add(_kline("BTCUSDT", datetime(2026, 1, 1, hour, 0, 0), high=105, low=95))
+    # A week later, price finally clears the 110 target — long after expiry.
+    db_session.add(_kline("BTCUSDT", datetime(2026, 1, 8, 10, 0, 0), high=130, low=95))
+    db_session.commit()
+
+    result = resolve_pending_scenarios(db_session, now=datetime(2026, 1, 8, 12, 0, 0))
+
+    assert result.resolved == 1
+    assert result.failed == 0
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.status == "expired"
+    assert reloaded.resolved_at == datetime(2026, 1, 1, 16, 5, 0)
+
+
+def test_resolve_pending_scenarios_defers_a_gapped_window(db_session):
+    """A gap in the window makes the true outcome unknowable, so don't guess.
+
+    Subsystem A tolerates permanently unfillable gaps; the missing candle could
+    have hit the stop before the visible candle hit the target.
+    """
+    scenario = _pending_scenario(
+        created_at=datetime(2026, 1, 1, 10, 5, 0),
+        expires_at=datetime(2026, 1, 2, 10, 5, 0),
+    )
+    db_session.add(scenario)
+    db_session.add(_kline("BTCUSDT", datetime(2026, 1, 1, 10, 0, 0), high=105, low=95))
+    # 11:00 is missing.
+    db_session.add(_kline("BTCUSDT", datetime(2026, 1, 1, 12, 0, 0), high=112, low=98))
+    db_session.commit()
+
+    result = resolve_pending_scenarios(db_session, now=datetime(2026, 1, 1, 13, 5, 0))
+
+    # A deferral, not an error: still_pending, never failed.
+    assert result.scanned == 1
+    assert result.resolved == 0
+    assert result.still_pending == 1
+    assert result.failed == 0
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.status == "pending"
+    assert reloaded.resolved_at is None
+
+
+def test_resolve_pending_scenarios_resolves_a_contiguous_window(db_session):
+    """The gap check must not reject a window that merely spans several candles."""
+    scenario = _pending_scenario(
+        created_at=datetime(2026, 1, 1, 10, 5, 0),
+        expires_at=datetime(2026, 1, 2, 10, 5, 0),
+    )
+    db_session.add(scenario)
+    for hour, high in ((10, 105), (11, 106), (12, 112)):
+        db_session.add(_kline("BTCUSDT", datetime(2026, 1, 1, hour, 0, 0), high=high, low=95))
+    db_session.commit()
+
+    result = resolve_pending_scenarios(db_session, now=datetime(2026, 1, 1, 13, 5, 0))
+
+    assert result.resolved == 1
+    reloaded = db_session.query(Scenario).first()
+    assert reloaded.status == "hit_target"
+    assert reloaded.resolved_at == datetime(2026, 1, 1, 12, 0, 0)
+
+
 def test_resolve_pending_scenarios_isolates_a_failing_scenario(db_session, monkeypatch):
     good = _pending_scenario(symbol="BTCUSDT", created_at=datetime(2026, 1, 1, 10, 5, 0))
     bad = _pending_scenario(symbol="ETHUSDT", created_at=datetime(2026, 1, 1, 10, 5, 0))
@@ -186,13 +260,59 @@ def test_run_learning_cycle_resolves_and_calibrates_end_to_end(db_session):
 
     reloaded = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
     assert reloaded.status == "hit_target"
-    # Outcome resolution commits BEFORE calibration reads the resolved-scenario
-    # pool, so the just-resolved BTCUSDT row is itself part of what it's
-    # calibrated against: 15 existing hits + this new hit = 16 of 21, not 15 of 20.
-    # calibrated_confidence is Numeric(5, 4), so the value coming back through a
-    # real DB round trip is quantized to 4 decimal places (unlike 15/20, 16/21
-    # isn't exactly representable in 4 decimals).
-    assert reloaded.calibrated_confidence == (Decimal("16") / Decimal("21")).quantize(Decimal("0.0001"))
+    # Calibration runs BEFORE resolution, so the BTCUSDT scenario is scored
+    # against the 20 outcomes that were already known — 15 of 20 — and not
+    # against its own, which this same run is about to determine. A score that
+    # knows how the scenario turned out is not a prediction.
+    assert reloaded.calibrated_confidence == Decimal("15") / Decimal("20")
+
+
+def test_run_learning_cycle_calibrates_before_resolving(db_session):
+    """Guard the ordering itself: a self-resolving scenario must not be in its own pool.
+
+    16/21 here would mean its own outcome leaked into its calibrated_confidence.
+    """
+    from src.learning_runner import run_learning_cycle
+
+    for _ in range(15):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_target"))
+    for _ in range(5):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_stop"))
+
+    scenario = _pending_scenario(symbol="BTCUSDT", direction="long", created_at=datetime(2026, 1, 1, 10, 5, 0))
+    scenario.confidence_score = Decimal("0.65")
+    db_session.add(scenario)
+    db_session.add(_kline("BTCUSDT", datetime(2026, 1, 1, 10, 0, 0), high=112, low=98))
+    db_session.commit()
+
+    run_learning_cycle(db_session, now=datetime(2026, 1, 1, 11, 5, 0))
+
+    reloaded = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
+    assert reloaded.calibrated_confidence != (Decimal("16") / Decimal("21")).quantize(Decimal("0.0001"))
+    assert reloaded.calibrated_confidence == Decimal("0.75")
+
+
+def test_run_learning_cycle_survives_a_resolution_failure(db_session, monkeypatch):
+    """Calibration already ran and is not undone by resolution blowing up."""
+    import src.learning_runner as learning_runner_module
+
+    pending = _pending_scenario(symbol="BTCUSDT", direction="long")
+    pending.confidence_score = Decimal("0.65")
+    db_session.add(pending)
+    db_session.commit()
+
+    def boom(session, now=None):
+        raise RuntimeError("resolution exploded")
+
+    monkeypatch.setattr(learning_runner_module, "resolve_pending_scenarios", boom)
+
+    from src.learning_runner import run_learning_cycle
+    result = run_learning_cycle(db_session, now=datetime(2026, 1, 1, 11, 5, 0))
+
+    assert result.scenarios_calibrated == 1
+    assert result.resolved == 0
+    assert result.failed == 0
+    assert db_session.query(Scenario).first().calibrated_confidence == Decimal("0.65")
 
 
 def test_run_learning_cycle_survives_a_calibration_failure(db_session, monkeypatch):
