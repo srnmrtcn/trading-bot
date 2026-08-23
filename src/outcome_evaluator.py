@@ -15,13 +15,23 @@ def evaluate_outcome(
     """Has this scenario resolved yet?
 
     `klines` are ascending dicts with `open_time`, `high`, `low`, covering the
-    window from just after the scenario's creation up to `now`. Returns
+    window from the scenario's creation up to `now`. Returns
     `(status, resolved_at)` if resolved, else `None` (still pending).
 
     A candle that touches both target and stop resolves as `hit_stop` — the
     conservative assumption, since intra-candle ordering isn't known.
+
+    A candle that opens at or after `expires_at` can never resolve the scenario:
+    by then it had already expired, so that price action is not its to claim.
     """
     for kline in klines:
+        # Price action from after the scenario expired is not evidence about the
+        # scenario. Without this bound, a window that reaches past expires_at —
+        # normal after an outage, when one pass scans the whole backfilled gap —
+        # would mark a long-dead scenario hit_target on a candle from days later.
+        if kline["open_time"] >= expires_at:
+            break
+
         if direction == "long":
             stop_hit = kline["low"] <= stop_price
             target_hit = kline["high"] >= target_price

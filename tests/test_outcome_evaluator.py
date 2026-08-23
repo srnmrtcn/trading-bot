@@ -42,6 +42,31 @@ def test_long_neither_hit_and_expired():
     assert result == ("expired", EXPIRES)
 
 
+def test_candle_at_or_after_expiry_cannot_resolve_a_win():
+    """A target touched after expires_at belongs to nobody — the scenario expired."""
+    klines = [_kline(0, 105, 95), _kline(24, 130, 95), _kline(48, 130, 95)]  # hour 24 == EXPIRES
+    result = evaluate_outcome(
+        "long", Decimal("110"), Decimal("90"), EXPIRES, klines, now=datetime(2026, 1, 3),
+    )
+    assert result == ("expired", EXPIRES)
+
+
+def test_candle_after_expiry_cannot_resolve_a_loss_either():
+    klines = [_kline(0, 105, 95), _kline(48, 105, 50)]  # stop-hitting candle, but too late
+    result = evaluate_outcome(
+        "long", Decimal("110"), Decimal("90"), EXPIRES, klines, now=datetime(2026, 1, 3),
+    )
+    assert result == ("expired", EXPIRES)
+
+
+def test_hit_before_expiry_still_wins_over_a_later_candle():
+    klines = [_kline(1, 112, 95), _kline(48, 105, 50)]
+    result = evaluate_outcome(
+        "long", Decimal("110"), Decimal("90"), EXPIRES, klines, now=datetime(2026, 1, 3),
+    )
+    assert result == ("hit_target", klines[0]["open_time"])
+
+
 def test_short_hits_target():
     klines = [_kline(0, 95, 88)]  # low <= 90 target
     result = evaluate_outcome("short", Decimal("90"), Decimal("110"), EXPIRES, klines, NOW)
