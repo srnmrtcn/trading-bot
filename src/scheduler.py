@@ -11,6 +11,7 @@ from src.db.models import Symbol
 from src.fetch_log import record_run
 from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
+from src.learning_runner import run_learning_cycle
 from src.scenario_runner import run_scenario_generation
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
@@ -133,6 +134,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 failed += 1
 
         scenario_result = None
+        learning_result = None
         if timeframe == "1h":
             try:
                 scenario_result = run_scenario_generation(session, symbols)
@@ -145,7 +147,21 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 # raise for the same reason the first one did.
                 logger.exception("Scenario generation failed for the %s job", timeframe)
 
-        if scenario_result is not None:
+            try:
+                learning_result = run_learning_cycle(session, now=end)
+            except Exception:
+                # Same reasoning as scenario generation above: isolate the
+                # summary log from a failure in the learning cycle itself.
+                logger.exception("Learning cycle failed for the %s job", timeframe)
+
+        if scenario_result is not None and learning_result is not None:
+            logger.info(
+                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, "
+                "%d scenarios generated, %d resolved, %d calibrated",
+                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
+                learning_result.resolved, learning_result.scenarios_calibrated,
+            )
+        elif scenario_result is not None:
             logger.info(
                 "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, %d scenarios generated",
                 timeframe, succeeded, failed, gaps_filled, scenario_result.generated,

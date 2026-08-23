@@ -288,7 +288,9 @@ def test_gap_repair_failure_is_logged_and_not_counted_as_filled(db_session, capl
 
     errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert any("Gap repair failed" in message and "BTCUSDT" in message for message in errors)
-    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated"]
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+    ]
 
 
 def test_gaps_filled_counts_stored_rows_not_fetch_attempts(db_session, caplog):
@@ -304,7 +306,9 @@ def test_gaps_filled_counts_stored_rows_not_fetch_attempts(db_session, caplog):
                 timeframe="1h", now=hour + timedelta(minutes=5),
             )
 
-    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated"] * 3
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+    ] * 3
     assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 0
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
@@ -319,7 +323,9 @@ def test_gaps_filled_counts_a_real_repair(db_session, caplog):
             timeframe="1h", now=hour + timedelta(minutes=5),
         )
 
-    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled, 0 scenarios generated"]
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+    ]
     assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 1
 
 
@@ -336,7 +342,9 @@ def test_run_summary_counts_each_symbol_exactly_once(db_session, caplog, monkeyp
     with caplog.at_level(logging.INFO, logger="scheduler"):
         run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
 
-    assert _summary_lines(caplog) == ["1h job finished: 0 symbols succeeded, 1 failed, 0 gaps filled, 0 scenarios generated"]
+    assert _summary_lines(caplog) == [
+        "1h job finished: 0 symbols succeeded, 1 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+    ]
 
 
 def test_run_timeframe_job_generates_scenarios_after_1h_fetch(db_session, monkeypatch):
@@ -390,3 +398,55 @@ def test_run_timeframe_job_does_not_generate_scenarios_for_1d(db_session, monkey
     run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1d")
 
     assert calls == []
+
+
+def test_run_timeframe_job_runs_learning_cycle_after_1h_fetch(db_session, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    calls = []
+
+    def fake_run_learning_cycle(session, now=None):
+        from src.learning_runner import LearningRunResult
+        calls.append(now)
+        return LearningRunResult(scanned=0, resolved=0, still_pending=0, failed=0, scenarios_calibrated=0)
+
+    monkeypatch.setattr(scheduler_module, "run_learning_cycle", fake_run_learning_cycle)
+
+    end = datetime(2026, 1, 1, 5, 0, 0)
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h", now=end)
+
+    assert calls == [end]
+
+
+def test_run_timeframe_job_does_not_run_learning_cycle_for_1d(db_session, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    calls = []
+    monkeypatch.setattr(
+        scheduler_module, "run_learning_cycle",
+        lambda session, now=None: calls.append(now),
+    )
+
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1d")
+
+    assert calls == []
+
+
+def test_run_timeframe_job_survives_a_learning_cycle_failure(db_session, caplog, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    def boom(session, now=None):
+        raise RuntimeError("learning cycle exploded")
+
+    monkeypatch.setattr(scheduler_module, "run_learning_cycle", boom)
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
+
+    assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
+    # Real scenario generation ran against a symbol with no klines -> skipped, generated=0.
+    # Learning cycle blew up, so the summary falls back to the scenario-only format.
+    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated"]
