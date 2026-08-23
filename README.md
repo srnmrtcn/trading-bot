@@ -54,6 +54,17 @@ Sinyaller yalnızca **kapanmış** mumlar üzerinden değerlendirilir; o an olu�
 pencerede eksik mum) veya anomali işaretli (`flagged`) olan semboller o çalıştırmada
 sessizce atlanır — hata sayılmaz, sonraki saatte tekrar denenir.
 
+## Öğrenme Döngüsü
+
+Her saatlik işin sonunda, senaryo üretiminin hemen ardından, tüm `pending` senaryolar gerçek
+mum verisiyle değerlendirilir: hedefe ulaştıysa `hit_target`, stop'a vurduysa `hit_stop`
+(aynı mumda ikisi de gerçekleşmişse stop öncelikli sayılır), süresi dolmuşsa `expired`
+olarak işaretlenir. Ardından yön + confidence aralığı desenine göre geçmiş başarı oranı
+hesaplanır (`hit_target / (hit_target + hit_stop + expired)`); bir desen için en az 20
+çözümlenmiş örnek varsa bu oran, henüz kalibre edilmemiş senaryolara `calibrated_confidence`
+olarak yazılır — yetersiz veri varsa ham `confidence_score` kullanılır. `calibrated_confidence`
+bir kez atanır ve tekrar üzerine yazılmaz.
+
 ## Test
 
 ```bash
