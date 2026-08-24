@@ -136,6 +136,42 @@ def test_close_resolved_positions_chains_equity_across_two_closes(db_session):
     assert second.equity_after == first.equity_after + Decimal("100")
 
 
+def test_close_resolved_positions_equity_chain_survives_id_order_diverging_from_created_at(db_session):
+    from src.paper_equity import current_equity
+
+    # This scenario was CREATED later but its POSITION was OPENED first (lower
+    # id) — an ordinary case: its symbol had an earlier open position that
+    # blocked it, which has since closed and freed the symbol. If the closer's
+    # close order ever drifts from id order again, this must fail.
+    later_created = _scenario(symbol="ETHUSDT", status="hit_target", created_at=datetime(2026, 1, 1, 1))
+    earlier_created = _scenario(symbol="BTCUSDT", status="hit_target", created_at=datetime(2026, 1, 1, 0))
+    db_session.add_all([later_created, earlier_created])
+    db_session.commit()
+    db_session.add(_open_position(later_created))    # gets the lower id
+    db_session.add(_open_position(earlier_created))  # gets the higher id
+    db_session.commit()
+
+    result = close_resolved_positions(db_session)
+
+    assert result.closed == 2
+    assert current_equity(db_session) == STARTING_EQUITY + Decimal("200")
+
+
+def test_close_resolved_positions_warns_about_stuck_positions(db_session, caplog):
+    import logging
+    stuck_scenario = _scenario(status="pending", created_at=datetime(2026, 1, 1), expires_at=datetime(2026, 1, 2))
+    db_session.add(stuck_scenario)
+    db_session.commit()
+    db_session.add(_open_position(stuck_scenario))
+    db_session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="paper_position_closer"):
+        result = close_resolved_positions(db_session, now=datetime(2026, 1, 5))
+
+    assert result.scanned == 0  # pending scenario, never entered the main loop
+    assert any("stuck" in record.getMessage() for record in caplog.records)
+
+
 def test_close_resolved_positions_isolates_a_failing_position(db_session, monkeypatch):
     good = _scenario(symbol="BTCUSDT", status="hit_target", created_at=datetime(2026, 1, 1, 0))
     bad = _scenario(

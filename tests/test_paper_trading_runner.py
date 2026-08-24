@@ -42,6 +42,44 @@ def test_run_paper_trading_cycle_opens_and_later_closes_a_position_end_to_end(db
     assert reloaded.equity_after == STARTING_EQUITY + reloaded.realized_pnl
 
 
+def test_run_paper_trading_cycle_closes_then_opens_using_freed_equity_in_one_cycle(db_session):
+    from src.paper_trading_config import RISK_PCT, STARTING_EQUITY
+
+    now = datetime(2026, 1, 1, 10)
+    resolved_scenario = Scenario(
+        symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("100"), target_price=Decimal("110"), stop_price=Decimal("90"),
+        expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
+        created_at=now - timedelta(hours=1), expires_at=now + timedelta(hours=23), status="hit_target",
+        calibrated_confidence=Decimal("0.7"),
+    )
+    db_session.add(resolved_scenario)
+    db_session.commit()
+    db_session.add(PaperPosition(
+        scenario_id=resolved_scenario.id, symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
+        risk_amount=Decimal("100"), position_size=Decimal("10"),
+        opened_at=now - timedelta(hours=1), status="open",
+    ))
+    new_scenario = Scenario(
+        symbol="ETHUSDT", direction="long",
+        entry_price=Decimal("100"), target_price=Decimal("110"), stop_price=Decimal("90"),
+        expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
+        created_at=now, expires_at=now + timedelta(hours=24), status="pending",
+        calibrated_confidence=Decimal("0.7"),
+    )
+    db_session.add(new_scenario)
+    db_session.commit()
+
+    result = run_paper_trading_cycle(db_session, now=now)
+
+    assert result.closed == 1
+    assert result.opened == 1
+    new_position = db_session.query(PaperPosition).filter(PaperPosition.symbol == "ETHUSDT").first()
+    expected_equity_after_close = STARTING_EQUITY + Decimal("100")  # 10 * (110 - 100)
+    assert new_position.risk_amount == expected_equity_after_close * RISK_PCT
+
+
 def test_run_paper_trading_cycle_survives_a_closer_failure_and_still_opens(db_session, monkeypatch):
     scenario = Scenario(
         symbol="BTCUSDT", direction="long",

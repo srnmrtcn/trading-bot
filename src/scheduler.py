@@ -163,31 +163,20 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 # in the paper trading cycle itself.
                 logger.exception("Paper trading cycle failed for the %s job", timeframe)
 
-        if scenario_result is not None and learning_result is not None and paper_result is not None:
-            logger.info(
-                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, "
-                "%d scenarios generated, %d resolved, %d calibrated, %d positions closed, %d opened",
-                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
-                learning_result.resolved, learning_result.scenarios_calibrated,
-                paper_result.closed, paper_result.opened,
-            )
-        elif scenario_result is not None and learning_result is not None:
-            logger.info(
-                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, "
-                "%d scenarios generated, %d resolved, %d calibrated",
-                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
-                learning_result.resolved, learning_result.scenarios_calibrated,
-            )
-        elif scenario_result is not None:
-            logger.info(
-                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, %d scenarios generated",
-                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
-            )
-        else:
-            logger.info(
-                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled",
-                timeframe, succeeded, failed, gaps_filled,
-            )
+        fmt = "%s job finished: %d symbols succeeded, %d failed, %d gaps filled"
+        args = [timeframe, succeeded, failed, gaps_filled]
+        if scenario_result is not None:
+            fmt += ", %d scenarios generated"
+            args.append(scenario_result.generated)
+        if learning_result is not None:
+            fmt += ", %d resolved, %d calibrated"
+            args.append(learning_result.resolved)
+            args.append(learning_result.scenarios_calibrated)
+        if paper_result is not None:
+            fmt += ", %d positions closed, %d opened"
+            args.append(paper_result.closed)
+            args.append(paper_result.opened)
+        logger.info(fmt, *args)
     finally:
         session.close()
 

@@ -28,12 +28,35 @@ def _exit_price_for_expired(session, symbol: str, expires_at: datetime):
         .filter(
             Kline.symbol == symbol,
             Kline.timeframe == RESOLUTION_TIMEFRAME,
-            Kline.open_time <= expires_at,
+            Kline.open_time < expires_at,
         )
         .order_by(Kline.open_time.desc())
         .first()
     )
     return row.close if row is not None else None
+
+
+def _count_stuck_positions(session, now: datetime) -> int:
+    """Open positions whose scenario never resolved and is now past expiry.
+
+    These are invisible to the loop above (it only touches positions whose
+    scenario is non-pending) and can never close on their own — Subsystem C
+    left the scenario pending because its resolution window has a permanently
+    unfillable gap. Not acted on here (inventing an exit price for a scenario
+    C never resolved is not this closer's call to make) — logged so an
+    operator can see a symbol/slot is stuck instead of a quiet portfolio
+    deadlock.
+    """
+    return (
+        session.query(PaperPosition)
+        .join(Scenario, PaperPosition.scenario_id == Scenario.id)
+        .filter(
+            PaperPosition.status == "open",
+            Scenario.status == "pending",
+            Scenario.expires_at <= now,
+        )
+        .count()
+    )
 
 
 def _realized_pnl(direction: str, position_size: Decimal, entry_price: Decimal, exit_price: Decimal) -> Decimal:
@@ -48,7 +71,9 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
         session.query(PaperPosition)
         .join(Scenario, PaperPosition.scenario_id == Scenario.id)
         .filter(PaperPosition.status == "open", Scenario.status != "pending")
-        .order_by(Scenario.created_at.asc(), PaperPosition.id.asc())
+        # Close order must agree with current_equity's id-based tie-break (both
+        # share `closed_at` within one cycle), not with scenario creation order.
+        .order_by(PaperPosition.id.asc())
         .all()
     )
 
@@ -69,7 +94,7 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
                 exit_price = scenario.target_price
             elif scenario.status == "hit_stop":
                 exit_price = scenario.stop_price
-            else:  # "expired"
+            elif scenario.status == "expired":
                 exit_price = _exit_price_for_expired(session, symbol, scenario.expires_at)
                 if exit_price is None:
                     logger.info(
@@ -78,6 +103,13 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
                     )
                     still_open += 1
                     continue
+            else:
+                logger.error(
+                    "Unrecognized scenario status %r for paper position %s (%s) — leaving it open",
+                    scenario.status, position_id, symbol,
+                )
+                still_open += 1
+                continue
 
             equity_before = current_equity(session)
             realized_pnl = _realized_pnl(position.direction, position.position_size, position.entry_price, exit_price)
@@ -93,5 +125,12 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
             session.rollback()
             logger.exception("Closing paper position %s (%s) failed", position_id, symbol)
             failed += 1
+
+    stuck = _count_stuck_positions(session, now)
+    if stuck:
+        logger.warning(
+            "%d open paper position(s) stuck: scenario still pending past its expiry",
+            stuck,
+        )
 
     return PositionCloseResult(scanned=scanned, closed=closed, still_open=still_open, failed=failed)

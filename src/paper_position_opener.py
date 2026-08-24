@@ -29,6 +29,7 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
         session.query(Scenario)
         .filter(
             Scenario.status == "pending",
+            Scenario.expires_at > now,
             Scenario.calibrated_confidence.isnot(None),
             Scenario.calibrated_confidence >= CONFIDENCE_THRESHOLD,
         )

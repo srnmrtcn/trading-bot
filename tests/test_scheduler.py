@@ -385,7 +385,9 @@ def test_run_timeframe_job_survives_a_scenario_generation_failure(db_session, ca
     with caplog.at_level(logging.INFO, logger="scheduler"):
         run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
 
-    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled"]
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 resolved, 0 calibrated, 0 positions closed, 0 opened"
+    ]
     assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
 
 
@@ -453,7 +455,9 @@ def test_run_timeframe_job_survives_a_learning_cycle_failure(db_session, caplog,
     assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
     # Real scenario generation ran against a symbol with no klines -> skipped, generated=0.
     # Learning cycle blew up, so the summary falls back to the scenario-only format.
-    assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated"]
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 positions closed, 0 opened"
+    ]
 
 
 def test_run_timeframe_job_runs_paper_trading_cycle_after_1h_learning_cycle(db_session, monkeypatch):

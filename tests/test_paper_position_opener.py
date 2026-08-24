@@ -61,6 +61,17 @@ def test_skips_a_scenario_with_no_calibrated_confidence_yet(db_session):
     assert db_session.query(PaperPosition).count() == 0
 
 
+def test_skips_a_pending_scenario_past_its_expiry(db_session):
+    scenario = _pending_scenario(created_at=datetime(2020, 1, 1))  # expires_at = created_at + 24h, long past
+    db_session.add(scenario)
+    db_session.commit()
+
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1))
+
+    assert result.scanned == 0
+    assert db_session.query(PaperPosition).count() == 0
+
+
 def test_skips_a_scenario_that_already_has_a_position(db_session):
     scenario = _pending_scenario()
     db_session.add(scenario)
@@ -85,7 +96,7 @@ def test_skips_a_second_qualifying_scenario_on_the_same_symbol_while_one_is_open
     db_session.add_all([first, second])
     db_session.commit()
 
-    result = open_qualifying_positions(db_session)
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
 
     assert result.scanned == 2
     assert result.opened == 1
@@ -102,7 +113,7 @@ def test_stops_opening_once_max_concurrent_positions_is_reached(db_session, monk
     db_session.add_all([first, second])
     db_session.commit()
 
-    result = open_qualifying_positions(db_session)
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
 
     assert result.opened == 1
     assert result.skipped == 1
@@ -125,7 +136,7 @@ def test_isolates_a_failing_position_open(db_session, monkeypatch):
 
     monkeypatch.setattr(opener_module, "size_position", flaky_size_position)
 
-    result = open_qualifying_positions(db_session)
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
 
     assert result.scanned == 2
     assert result.opened == 1
