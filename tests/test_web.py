@@ -9,7 +9,7 @@ from src.web import create_app
 
 AUTH_USER = "admin"
 AUTH_PASSWORD = "s3cret"
-AUTH_PASS_HASH = generate_password_hash(AUTH_PASSWORD)
+AUTH_PASS_HASH = generate_password_hash(AUTH_PASSWORD, method="pbkdf2:sha256")
 
 
 def _client(db_session):
