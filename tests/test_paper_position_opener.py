@@ -84,7 +84,7 @@ def test_skips_a_scenario_that_already_has_a_position(db_session):
     ))
     db_session.commit()
 
-    result = open_qualifying_positions(db_session)
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
 
     assert result.scanned == 0
     assert db_session.query(PaperPosition).count() == 1
