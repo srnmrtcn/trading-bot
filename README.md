@@ -81,6 +81,17 @@ en yakın kapanmış mumun kapanış fiyatından (henüz o mum yoksa pozisyon a�
 yok, her kapanan pozisyon satırı kendi `equity_before`/`equity_after` değerlerini taşır; pozisyon
 geçmişinin kendisi equity eğrisidir.
 
+## Dashboard
+
+Servis çalışırken `http://localhost:8000` (Railway'de kendi public domain'inde, `PORT` ortam
+değişkeni Railway tarafından otomatik enjekte edilir) üzerinden tek sayfalık bir dashboard
+sunulur: son aktivite zamanı/sağlık durumu, paper portföyün güncel equity'si ve kısa geçmişi,
+açık pozisyonlar ve en son üretilen senaryolar. `BASIC_AUTH_USER` / `BASIC_AUTH_PASS_HASH`
+ortam değişkenleriyle korunur — parola hash'i `python3 -c "from werkzeug.security import
+generate_password_hash; print(generate_password_hash('...', method='pbkdf2:sha256'))"` ile
+üretilir, düz metin parola hiçbir yerde saklanmaz. Dashboard verisi her istekte veritabanından
+canlı okunur; scheduler'dan bağımsız ayrı bir DB oturumu kullanır, birbirlerini bloklamazlar.
+
 ## Test
 
 ```bash

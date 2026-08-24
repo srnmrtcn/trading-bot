@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from logging.handlers import RotatingFileHandler
 
 from src.backfill import run_initial_backfill
 from src.binance_client import BinanceClient
-from src.config import get_database_url
+from src.config import get_basic_auth_credentials, get_database_url
 from src.db.models import Symbol
 from src.db.session import create_all_tables, make_engine, make_session_factory
 from src.scheduler import build_scheduler
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
+from src.web import create_app
 
 logger = logging.getLogger("main")
 
@@ -97,10 +97,14 @@ def run_forever(session_factory, binance_client) -> None:
     scheduler = build_scheduler(session_factory, binance_client)
     scheduler.start()
     logger.info("Scheduler started, service running")
+    auth_user, auth_pass_hash = get_basic_auth_credentials()
+    app = create_app(session_factory, auth_user, auth_pass_hash)
+    port = int(os.environ.get("PORT", 8000))
     try:
-        while True:
-            time.sleep(60)
+        app.run(host="0.0.0.0", port=port)
     except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
         scheduler.shutdown()
 
 

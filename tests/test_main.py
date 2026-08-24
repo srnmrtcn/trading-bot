@@ -164,3 +164,59 @@ def test_configure_logging_accepts_a_bare_filename(tmp_path, monkeypatch):
                 handler.close()
         root.handlers = original_handlers
         root.setLevel(original_level)
+
+
+def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(monkeypatch):
+    calls = []
+
+    class _FakeScheduler:
+        def start(self):
+            calls.append("scheduler.start")
+
+        def shutdown(self):
+            calls.append("scheduler.shutdown")
+
+    class _FakeApp:
+        def run(self, host, port):
+            calls.append(("app.run", host, port))
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
+    monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))
+    monkeypatch.setattr(
+        main_module, "create_app",
+        lambda session_factory, auth_user, auth_pass_hash: _FakeApp(),
+    )
+    monkeypatch.setenv("PORT", "9000")
+
+    main_module.run_forever(session_factory=lambda: None, binance_client=None)
+
+    assert calls == ["scheduler.start", ("app.run", "0.0.0.0", 9000), "scheduler.shutdown"]
+
+
+def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
+    calls = []
+
+    class _FakeScheduler:
+        def start(self):
+            pass
+
+        def shutdown(self):
+            pass
+
+    class _FakeApp:
+        def run(self, host, port):
+            calls.append(("app.run", host, port))
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
+    monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))
+    monkeypatch.setattr(
+        main_module, "create_app",
+        lambda session_factory, auth_user, auth_pass_hash: _FakeApp(),
+    )
+    monkeypatch.delenv("PORT", raising=False)
+
+    main_module.run_forever(session_factory=lambda: None, binance_client=None)
+
+    assert calls == [("app.run", "0.0.0.0", 8000)]
