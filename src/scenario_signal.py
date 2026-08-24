@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from src.indicators import compute_ema, compute_rsi, detect_ema_crossover, detect_volume_spike
+from src.indicators import compute_ema, compute_rsi, detect_confluence_in_window
 
 RSI_PERIOD = 14
 EMA_FAST_PERIOD = 9
@@ -13,6 +13,7 @@ VOLUME_MULTIPLIER = Decimal("2")
 RSI_OVERSOLD = Decimal("30")
 RSI_OVERBOUGHT = Decimal("70")
 MIN_CANDLES = 100
+CONFLUENCE_WINDOW = 3
 
 
 @dataclass
@@ -33,8 +34,9 @@ def evaluate_signal(klines: list):
     rsi_series = compute_rsi(closes, RSI_PERIOD)
     ema_fast = compute_ema(closes, EMA_FAST_PERIOD)
     ema_slow = compute_ema(closes, EMA_SLOW_PERIOD)
-    crossover = detect_ema_crossover(ema_fast, ema_slow)
-    volume_spike = detect_volume_spike(volumes, VOLUME_LOOKBACK, VOLUME_MULTIPLIER)
+    crossover = detect_confluence_in_window(
+        ema_fast, ema_slow, volumes, VOLUME_LOOKBACK, VOLUME_MULTIPLIER, CONFLUENCE_WINDOW
+    )
 
     current_rsi = rsi_series[-1]
     previous_rsi = rsi_series[-2]
@@ -43,8 +45,8 @@ def evaluate_signal(klines: list):
 
     entry_price = closes[-1]
 
-    if previous_rsi < RSI_OVERSOLD <= current_rsi and crossover == "bullish" and volume_spike:
+    if previous_rsi < RSI_OVERSOLD <= current_rsi and crossover == "bullish":
         return SignalResult(direction="long", entry_price=entry_price, rsi=current_rsi, previous_rsi=previous_rsi)
-    if previous_rsi > RSI_OVERBOUGHT >= current_rsi and crossover == "bearish" and volume_spike:
+    if previous_rsi > RSI_OVERBOUGHT >= current_rsi and crossover == "bearish":
         return SignalResult(direction="short", entry_price=entry_price, rsi=current_rsi, previous_rsi=previous_rsi)
     return None

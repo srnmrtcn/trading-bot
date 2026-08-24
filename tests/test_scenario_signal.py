@@ -54,6 +54,35 @@ def test_evaluate_signal_detects_long_setup():
     assert signal.entry_price == reversal_price
 
 
+def test_evaluate_signal_rejects_a_crossover_and_volume_spike_on_different_candles():
+    # Same downtrend-then-reversal shape as test_evaluate_signal_detects_long_setup,
+    # but the volume spike lands on the second-to-last downtrend candle while the
+    # EMA crossover (and the RSI reversal) land on the reversal candle. Even though
+    # both events fall inside the confluence window, they never share a candle, so
+    # this must not count as confluence.
+    klines = _flat_klines(60, price=Decimal("100"))
+    price = Decimal("100")
+    downtrend = []
+    for i in range(60):
+        price -= Decimal("1")
+        volume = Decimal("5000") if i == 58 else Decimal("1000")
+        downtrend.append({
+            "open_time": datetime(2026, 1, 1) + timedelta(hours=60 + i),
+            "open": price, "high": price, "low": price, "close": price, "volume": volume,
+        })
+    klines = klines + downtrend
+    last_price = downtrend[-1]["close"]
+    reversal_price = last_price + Decimal("80")
+    reversal = {
+        "open_time": datetime(2026, 1, 1) + timedelta(hours=120),
+        "open": last_price, "high": reversal_price, "low": last_price,
+        "close": reversal_price, "volume": Decimal("1000"),
+    }
+    klines = klines + [reversal]
+
+    assert evaluate_signal(klines) is None
+
+
 def test_evaluate_signal_detects_short_setup():
     klines = _flat_klines(60, price=Decimal("100"))
     price = Decimal("100")

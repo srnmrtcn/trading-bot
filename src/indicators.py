@@ -69,6 +69,20 @@ def detect_volume_spike(volumes: list, lookback: int = 20, multiplier: Decimal =
     return current > avg * multiplier
 
 
+def detect_confluence_in_window(
+    fast: list, slow: list, volumes: list, lookback: int, multiplier: Decimal, window: int
+) -> str:
+    n = len(fast)
+    for offset in range(window):
+        end = n - offset
+        if end < 2 or end < lookback + 1:
+            break
+        crossover = detect_ema_crossover(fast[:end], slow[:end])
+        if crossover != "none" and detect_volume_spike(volumes[:end], lookback, multiplier):
+            return crossover
+    return "none"
+
+
 def average_true_range(klines: list, period: int = 20) -> Decimal:
     if len(klines) < period + 1:
         return Decimal("0")
