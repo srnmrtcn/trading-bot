@@ -23,7 +23,9 @@ def create_app(session_factory, auth_user: str, auth_pass_hash: str) -> Flask:
         auth = request.authorization
         return (
             auth is not None
+            and auth.type == "basic"
             and auth.username == auth_user
+            and auth.password is not None
             and check_password_hash(auth_pass_hash, auth.password)
         )
 
@@ -41,20 +43,19 @@ def create_app(session_factory, auth_user: str, auth_pass_hash: str) -> Flask:
             equity = get_equity_summary(session)
             open_positions = get_open_positions(session)
             recent_scenarios = get_recent_scenarios(session)
+            return render_template(
+                "dashboard.html",
+                error=False,
+                health=health,
+                equity=equity,
+                sparkline_points=equity_sparkline_points(equity.history),
+                open_positions=open_positions,
+                recent_scenarios=recent_scenarios,
+            )
         except Exception:
             logger.exception("Failed to load dashboard data")
             return render_template("dashboard.html", error=True)
         finally:
             session.close()
-
-        return render_template(
-            "dashboard.html",
-            error=False,
-            health=health,
-            equity=equity,
-            sparkline_points=equity_sparkline_points(equity.history),
-            open_positions=open_positions,
-            recent_scenarios=recent_scenarios,
-        )
 
     return app

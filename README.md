@@ -19,7 +19,8 @@ PostgreSQL'de saklayan ve kendi bütünlüğünü doğrulayan arka plan servisi.
    ```
 4. `.env.example` dosyasını `.env` olarak kopyala ve `DATABASE_URL`'i düzenle,
    sonra ortam değişkenini yükle (örn. `export $(cat .env | xargs)` veya
-   shell profilinden `export DATABASE_URL=...`).
+   shell profilinden `export DATABASE_URL=...`) — servis `BASIC_AUTH_USER` ve
+   `BASIC_AUTH_PASS_HASH` olmadan da başlamaz.
 
 ## Çalıştırma
 

@@ -33,6 +33,11 @@ def test_dashboard_rejects_wrong_username(db_session):
     assert response.status_code == 401
 
 
+def test_dashboard_rejects_non_basic_auth_scheme(db_session):
+    response = _client(db_session).get("/", headers={"Authorization": 'Digest username="admin"'})
+    assert response.status_code == 401
+
+
 def test_dashboard_renders_with_correct_credentials(db_session):
     response = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD))
     assert response.status_code == 200

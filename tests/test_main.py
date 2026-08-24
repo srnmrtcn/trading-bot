@@ -177,21 +177,39 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
             calls.append("scheduler.shutdown")
 
     class _FakeApp:
-        def run(self, host, port):
-            calls.append(("app.run", host, port))
+        def run(self, host, port, debug=None, use_reloader=None):
+            calls.append(("app.run", host, port, debug, use_reloader))
             raise KeyboardInterrupt()
 
-    monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
-    monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))
-    monkeypatch.setattr(
-        main_module, "create_app",
-        lambda session_factory, auth_user, auth_pass_hash: _FakeApp(),
-    )
+    def _fake_get_basic_auth_credentials():
+        calls.append("get_basic_auth_credentials")
+        return ("admin", "hash")
+
+    def _fake_create_app(session_factory, auth_user, auth_pass_hash):
+        calls.append("create_app")
+        return _FakeApp()
+
+    def _fake_build_scheduler(session_factory, binance_client):
+        calls.append("build_scheduler")
+        return _FakeScheduler()
+
+    monkeypatch.setattr(main_module, "build_scheduler", _fake_build_scheduler)
+    monkeypatch.setattr(main_module, "get_basic_auth_credentials", _fake_get_basic_auth_credentials)
+    monkeypatch.setattr(main_module, "create_app", _fake_create_app)
     monkeypatch.setenv("PORT", "9000")
 
     main_module.run_forever(session_factory=lambda: None, binance_client=None)
 
-    assert calls == ["scheduler.start", ("app.run", "0.0.0.0", 9000), "scheduler.shutdown"]
+    # Config must be read and the app built BEFORE the scheduler starts, so a
+    # missing env var or bad PORT never leaves the scheduler running unshut.
+    assert calls == [
+        "get_basic_auth_credentials",
+        "create_app",
+        "build_scheduler",
+        "scheduler.start",
+        ("app.run", "0.0.0.0", 9000, False, False),
+        "scheduler.shutdown",
+    ]
 
 
 def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
@@ -205,8 +223,8 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
             pass
 
     class _FakeApp:
-        def run(self, host, port):
-            calls.append(("app.run", host, port))
+        def run(self, host, port, debug=None, use_reloader=None):
+            calls.append(("app.run", host, port, debug, use_reloader))
             raise KeyboardInterrupt()
 
     monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
@@ -219,4 +237,4 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
 
     main_module.run_forever(session_factory=lambda: None, binance_client=None)
 
-    assert calls == [("app.run", "0.0.0.0", 8000)]
+    assert calls == [("app.run", "0.0.0.0", 8000, False, False)]

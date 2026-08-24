@@ -94,14 +94,14 @@ def startup():
 
 
 def run_forever(session_factory, binance_client) -> None:
+    auth_user, auth_pass_hash = get_basic_auth_credentials()
+    port = int(os.environ.get("PORT", 8000))
+    app = create_app(session_factory, auth_user, auth_pass_hash)
     scheduler = build_scheduler(session_factory, binance_client)
     scheduler.start()
     logger.info("Scheduler started, service running")
-    auth_user, auth_pass_hash = get_basic_auth_credentials()
-    app = create_app(session_factory, auth_user, auth_pass_hash)
-    port = int(os.environ.get("PORT", 8000))
     try:
-        app.run(host="0.0.0.0", port=port)
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:

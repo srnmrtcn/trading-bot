@@ -27,10 +27,11 @@ class EquitySummary:
     history: list[tuple[datetime, Decimal]]
 
 
-def get_system_health(session, now: datetime = None) -> SystemHealth:
+def get_system_health(session, now: datetime | None = None) -> SystemHealth:
     now = now if now is not None else utc_now()
     last_activity = (
         session.query(FetchLog.finished_at)
+        .filter(FetchLog.finished_at.isnot(None))
         .order_by(FetchLog.finished_at.desc())
         .limit(1)
         .scalar()
@@ -80,7 +81,7 @@ def get_open_positions(session) -> list[PaperPosition]:
     return (
         session.query(PaperPosition)
         .filter(PaperPosition.status == "open")
-        .order_by(PaperPosition.opened_at.desc())
+        .order_by(PaperPosition.opened_at.desc(), PaperPosition.id.desc())
         .all()
     )
 
@@ -88,7 +89,7 @@ def get_open_positions(session) -> list[PaperPosition]:
 def get_recent_scenarios(session, limit: int = RECENT_SCENARIOS_LIMIT) -> list[Scenario]:
     return (
         session.query(Scenario)
-        .order_by(Scenario.created_at.desc())
+        .order_by(Scenario.created_at.desc(), Scenario.id.desc())
         .limit(limit)
         .all()
     )
