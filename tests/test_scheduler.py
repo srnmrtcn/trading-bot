@@ -289,7 +289,8 @@ def test_gap_repair_failure_is_logged_and_not_counted_as_filled(db_session, capl
     errors = [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR]
     assert any("Gap repair failed" in message and "BTCUSDT" in message for message in errors)
     assert _summary_lines(caplog) == [
-        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, "
+        "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ]
 
 
@@ -307,7 +308,8 @@ def test_gaps_filled_counts_stored_rows_not_fetch_attempts(db_session, caplog):
             )
 
     assert _summary_lines(caplog) == [
-        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, "
+        "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ] * 3
     assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 0
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
@@ -324,7 +326,8 @@ def test_gaps_filled_counts_a_real_repair(db_session, caplog):
         )
 
     assert _summary_lines(caplog) == [
-        "1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+        "1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled, 0 scenarios generated, "
+        "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ]
     assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 1
 
@@ -343,7 +346,8 @@ def test_run_summary_counts_each_symbol_exactly_once(db_session, caplog, monkeyp
         run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
 
     assert _summary_lines(caplog) == [
-        "1h job finished: 0 symbols succeeded, 1 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+        "1h job finished: 0 symbols succeeded, 1 failed, 0 gaps filled, 0 scenarios generated, "
+        "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ]
 
 
@@ -450,3 +454,58 @@ def test_run_timeframe_job_survives_a_learning_cycle_failure(db_session, caplog,
     # Real scenario generation ran against a symbol with no klines -> skipped, generated=0.
     # Learning cycle blew up, so the summary falls back to the scenario-only format.
     assert _summary_lines(caplog) == ["1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated"]
+
+
+def test_run_timeframe_job_runs_paper_trading_cycle_after_1h_learning_cycle(db_session, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    calls = []
+
+    def fake_run_paper_trading_cycle(session, now=None):
+        from src.paper_trading_runner import PaperTradingResult
+        calls.append(now)
+        return PaperTradingResult(closed=0, still_open=0, opened=0, skipped=0, failed=0)
+
+    monkeypatch.setattr(scheduler_module, "run_paper_trading_cycle", fake_run_paper_trading_cycle)
+
+    end = datetime(2026, 1, 1, 5, 0, 0)
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h", now=end)
+
+    assert calls == [end]
+
+
+def test_run_timeframe_job_does_not_run_paper_trading_cycle_for_1d(db_session, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    calls = []
+    monkeypatch.setattr(
+        scheduler_module, "run_paper_trading_cycle",
+        lambda session, now=None: calls.append(now),
+    )
+
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1d")
+
+    assert calls == []
+
+
+def test_run_timeframe_job_survives_a_paper_trading_cycle_failure(db_session, caplog, monkeypatch):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+
+    def boom(session, now=None):
+        raise RuntimeError("paper trading cycle exploded")
+
+    monkeypatch.setattr(scheduler_module, "run_paper_trading_cycle", boom)
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
+
+    assert any(record.exc_info for record in caplog.records if record.levelno >= logging.ERROR)
+    # Real scenario generation and learning cycle ran for real against empty
+    # tables and trivially succeeded. Paper trading blew up, so the summary
+    # falls back to the scenario+learning (3-field) format, not the full one.
+    assert _summary_lines(caplog) == [
+        "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
+    ]

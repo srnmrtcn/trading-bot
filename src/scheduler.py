@@ -12,6 +12,7 @@ from src.fetch_log import record_run
 from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
 from src.learning_runner import run_learning_cycle
+from src.paper_trading_runner import run_paper_trading_cycle
 from src.scenario_runner import run_scenario_generation
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
@@ -135,6 +136,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
 
         scenario_result = None
         learning_result = None
+        paper_result = None
         if timeframe == "1h":
             try:
                 scenario_result = run_scenario_generation(session, symbols)
@@ -154,7 +156,22 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 # summary log from a failure in the learning cycle itself.
                 logger.exception("Learning cycle failed for the %s job", timeframe)
 
-        if scenario_result is not None and learning_result is not None:
+            try:
+                paper_result = run_paper_trading_cycle(session, now=end)
+            except Exception:
+                # Same reasoning again: isolate the summary log from a failure
+                # in the paper trading cycle itself.
+                logger.exception("Paper trading cycle failed for the %s job", timeframe)
+
+        if scenario_result is not None and learning_result is not None and paper_result is not None:
+            logger.info(
+                "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, "
+                "%d scenarios generated, %d resolved, %d calibrated, %d positions closed, %d opened",
+                timeframe, succeeded, failed, gaps_filled, scenario_result.generated,
+                learning_result.resolved, learning_result.scenarios_calibrated,
+                paper_result.closed, paper_result.opened,
+            )
+        elif scenario_result is not None and learning_result is not None:
             logger.info(
                 "%s job finished: %d symbols succeeded, %d failed, %d gaps filled, "
                 "%d scenarios generated, %d resolved, %d calibrated",
