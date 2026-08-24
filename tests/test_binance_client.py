@@ -1,4 +1,5 @@
 from datetime import datetime
+from unittest.mock import patch
 
 from src.binance_client import BinanceClient
 
@@ -20,6 +21,14 @@ class _FakeClient:
         page = self._kline_pages[self._page_index]
         self._page_index += 1
         return page
+
+
+def test_init_configures_a_request_timeout_so_the_client_never_hangs_forever():
+    with patch("src.binance_client.Client") as mock_client_cls:
+        BinanceClient()
+        _, kwargs = mock_client_cls.call_args
+        timeout = kwargs.get("requests_params", {}).get("timeout")
+        assert timeout is not None and timeout > 0
 
 
 def test_get_active_usdt_symbols_filters_trading_and_usdt():

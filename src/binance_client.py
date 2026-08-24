@@ -7,10 +7,19 @@ from binance.client import Client
 
 from src.rate_limit import RateLimitBackoff
 
+# requests has no default timeout, so a Binance call with no response (a
+# blocked/throttled outbound IP, a dead TCP connection) would otherwise hang
+# forever — silently stalling the whole boot sequence before it ever logs
+# anything or opens the HTTP port.
+REQUEST_TIMEOUT_SECONDS = 10
+
 
 class BinanceClient:
     def __init__(self, client=None, backoff: RateLimitBackoff = None):
-        self._client = client or Client(api_key="", api_secret="")
+        self._client = client or Client(
+            api_key="", api_secret="",
+            requests_params={"timeout": REQUEST_TIMEOUT_SECONDS},
+        )
         self._backoff = backoff or RateLimitBackoff()
 
     def get_active_usdt_symbols(self) -> list:

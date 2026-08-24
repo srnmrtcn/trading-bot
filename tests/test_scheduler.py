@@ -10,7 +10,7 @@ from src.scheduler import (
     run_symbol_refresh_job,
     run_timeframe_job,
 )
-from src.timeutil import to_epoch_ms, utc_now
+from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
 import src.scheduler as scheduler_module
 
 
@@ -111,9 +111,9 @@ def test_get_resume_point_uses_last_stored_kline_not_fetch_log(db_session):
     assert get_resume_point(db_session, "BTCUSDT", "1h", now=datetime(2026, 6, 1)) == datetime(2026, 1, 1, 5)
 
 
-def test_get_resume_point_falls_back_to_730_days_when_no_data(db_session):
+def test_get_resume_point_falls_back_to_default_backfill_days_when_no_data(db_session):
     now = datetime(2026, 6, 1)
-    assert get_resume_point(db_session, "BTCUSDT", "1h", now=now) == now - timedelta(days=730)
+    assert get_resume_point(db_session, "BTCUSDT", "1h", now=now) == now - timedelta(days=DEFAULT_BACKFILL_DAYS)
 
 
 def test_run_timeframe_job_start_derives_from_kline_not_fetch_log(db_session):
