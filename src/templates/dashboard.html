@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Kripto Analiz Ofisi — Dashboard</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0d1117; color: #e6edf3; margin: 0; padding: 2rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 1.5rem; }
+  h2 { font-size: 1rem; margin: 0 0 0.75rem; color: #c9d1d9; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; }
+  .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
+  .badge.healthy { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
+  .badge.delayed { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+  .badge.stopped { background: rgba(248, 81, 73, 0.2); color: #f85149; }
+  .equity-value { font-size: 2rem; font-weight: 700; margin: 0.5rem 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #30363d; }
+  th { color: #8b949e; font-weight: 500; }
+  .empty { color: #8b949e; font-style: italic; }
+  .error { color: #f85149; }
+</style>
+</head>
+<body>
+<h1>Kripto Analiz Ofisi — Dashboard</h1>
+
+{% if error %}
+<div class="card error">Veri şu an okunamıyor. Servis bir sonraki denemede otomatik toparlanır.</div>
+{% else %}
+
+<div class="card">
+  <span class="badge {{ health.status }}">
+    {% if health.status == "healthy" %}Çalışıyor
+    {%- elif health.status == "delayed" %}Gecikmiş
+    {%- else %}Durmuş görünüyor
+    {%- endif %}
+  </span>
+  <p>
+    {% if health.last_activity %}
+      Son aktivite: {{ health.last_activity.strftime("%Y-%m-%d %H:%M UTC") }}
+    {% else %}
+      Henüz hiç kayıt yok.
+    {% endif %}
+  </p>
+</div>
+
+<div class="card">
+  <h2>Paper Portföy Equity</h2>
+  <div class="equity-value">{{ "%.2f"|format(equity.current) }}</div>
+  {% if sparkline_points %}
+  <svg width="200" height="40" viewBox="0 0 200 40">
+    <polyline points="{{ sparkline_points }}" fill="none" stroke="#3fb950" stroke-width="2" />
+  </svg>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Açık Pozisyonlar</h2>
+  {% if open_positions %}
+  <table>
+    <tr><th>Sembol</th><th>Yön</th><th>Giriş</th><th>Stop</th><th>Hedef</th><th>Açılış</th></tr>
+    {% for position in open_positions %}
+    <tr>
+      <td>{{ position.symbol }}</td>
+      <td>{{ position.direction }}</td>
+      <td>{{ position.entry_price }}</td>
+      <td>{{ position.stop_price }}</td>
+      <td>{{ position.target_price }}</td>
+      <td>{{ position.opened_at.strftime("%Y-%m-%d %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">Açık pozisyon yok.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Son Senaryolar</h2>
+  {% if recent_scenarios %}
+  <table>
+    <tr><th>Sembol</th><th>Yön</th><th>Confidence</th><th>Durum</th><th>Oluşturulma</th></tr>
+    {% for scenario in recent_scenarios %}
+    <tr>
+      <td>{{ scenario.symbol }}</td>
+      <td>{{ scenario.direction }}</td>
+      <td>{{ "%.2f"|format(scenario.calibrated_confidence if scenario.calibrated_confidence is not none else scenario.confidence_score) }}</td>
+      <td>{{ scenario.status }}</td>
+      <td>{{ scenario.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">Henüz senaryo yok.</p>
+  {% endif %}
+</div>
+
+{% endif %}
+</body>
+</html>
