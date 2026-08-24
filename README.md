@@ -65,6 +65,22 @@ hesaplanır (`hit_target / (hit_target + hit_stop + expired)`); bir desen için 
 olarak yazılır — yetersiz veri varsa ham `confidence_score` kullanılır. `calibrated_confidence`
 bir kez atanır ve tekrar üzerine yazılmaz.
 
+## Paper Test Portföyü
+
+Öğrenme döngüsünün hemen ardından, kalibre edilmiş güveni (`calibrated_confidence`) 0.65 ve üzeri
+olan `pending` senaryolar için simüle bir paper pozisyon açılır — sabit sermayeli (10000, nominal
+bir referans; yalnızca yüzdesel getiri anlamlıdır), sabit-oransal risk (%1) ile boyutlandırılır:
+pozisyon büyüklüğü `equity × %1 / |entry - stop|` olarak hesaplanır. Aynı sembolde zaten açık bir
+pozisyon varsa veya eşzamanlı açık pozisyon sayısı 10'a ulaştıysa yeni pozisyon açılmaz. Bir
+senaryo en fazla bir kez paper pozisyona dönüşür.
+
+Bir senaryo sonuçlandığında (Öğrenme Döngüsü tarafından), ilişkili paper pozisyon aynı çalıştırmada
+kapatılır: `hit_target` → hedef fiyattan, `hit_stop` → stop fiyatından, `expired` → süre dolduğunda
+en yakın kapanmış mumun kapanış fiyatından (henüz o mum yoksa pozisyon açık kalır, sonraki
+çalıştırmada tekrar denenir). Gerçekleşen kâr/zarar equity'ye eklenir — ayrı bir "hesap" tablosu
+yok, her kapanan pozisyon satırı kendi `equity_before`/`equity_after` değerlerini taşır; pozisyon
+geçmişinin kendisi equity eğrisidir.
+
 ## Test
 
 ```bash
