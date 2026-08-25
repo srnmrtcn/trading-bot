@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from datetime import timedelta
 from decimal import Decimal
 
@@ -76,6 +77,8 @@ def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-frac", type=float, default=0.7)
+    parser.add_argument("--limit", type=int, default=None,
+                        help="use only the first N symbols (smoke runs)")
     args = parser.parse_args(argv)
 
     session = make_session_factory(make_engine(RESEARCH_DB_URL))()
@@ -86,6 +89,8 @@ def main(argv=None) -> int:
         ]
         series = {s: load_klines(session, s) for s in symbols}
         series = {s: k for s, k in series.items() if len(k) > MIN_CANDLES + FUTURE_HORIZON}
+        if args.limit:
+            series = dict(list(series.items())[:args.limit])
         regime_at = make_regime_lookup(session)
 
         opens = [k[0]["open_time"] for k in series.values()] + [k[-1]["open_time"] for k in series.values()]
@@ -102,7 +107,10 @@ def main(argv=None) -> int:
         print("-" * len(header))
 
         for rule in RULES:
+            print(f"  [{rule}] taslaklar toplaniyor...", flush=True)
+            started = time.time()
             drafts = collect_drafts(series, rule, regime_at)
+            print(f"  [{rule}] {len(drafts)} taslak, {time.time() - started:.0f}s", flush=True)
             best, eligible = None, 0
             for stop in MIN_STOP_PCTS:
                 for rr in MIN_RRS:

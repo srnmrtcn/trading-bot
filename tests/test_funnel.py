@@ -13,7 +13,10 @@ from src.research.funnel import (
     resolve_draft,
 )
 from src.scenario_builder import ScenarioDraft
-from src.scenario_signal import MIN_CANDLES
+from src.indicators import compute_rsi
+from src.research.funnel import _rsi_for_window, _rule_signal
+from src.scenario_runner import SCENARIO_LOOKBACK
+from src.scenario_signal import MIN_CANDLES, RSI_PERIOD, evaluate_signal
 
 
 def _series(closes: list, volumes: list = None, start: datetime = None) -> list:
@@ -338,3 +341,33 @@ def test_iter_scenarios_reports_why_a_signal_produced_no_draft():
 
     blocked = [e.kind for e in iter_scenarios("TESTUSDT", klines, "trend", regime_at=lambda n: "down")]
     assert blocked == ["regime_blocked"]
+
+
+def test_the_shipped_rule_short_circuit_never_changes_which_signals_fire():
+    """`evaluate_signal` returns non-None only when RSI crossed one of its two
+    thresholds on this candle, so testing that first from a precomputed series
+    and only then delegating is exactly equivalent — and skips a 101-candle
+    Decimal RSI recomputation for the ~94% of candles that cannot fire.
+
+    Equivalence is the whole point, so it is asserted against production
+    directly, candle by candle, rather than trusted.
+    """
+    closes = [100] * 40 + list(range(99, 79, -1)) + [86 + 2 * i for i in range(15)]
+    closes += [round(115 - 0.7 * i, 2) for i in range(30)]
+    closes += [round(94 + 1.5 * i, 2) for i in range(30)]
+    volumes = [100] * 40 + [120] * 20 + [400] + [120] * 74
+    klines = _series(closes, volumes)
+    rsi_series = compute_rsi([row["close"] for row in klines], RSI_PERIOD)
+
+    compared = 0
+    for end in range(MIN_CANDLES, len(klines) + 1):
+        window = klines[max(0, end - SCENARIO_LOOKBACK):end]
+        expected = evaluate_signal(window)
+        actual = _rule_signal("shipped", window, _rsi_for_window(rsi_series, end, len(window)))
+        assert (actual is None) == (expected is None), f"diverged at {end}"
+        if expected is not None:
+            assert actual.direction == expected.direction
+            assert actual.entry_price == expected.entry_price
+        compared += 1
+
+    assert compared > 0

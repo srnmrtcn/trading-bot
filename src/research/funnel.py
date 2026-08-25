@@ -16,6 +16,7 @@ from src.scenario_signal import (
     EMA_FAST_PERIOD,
     EMA_SLOW_PERIOD,
     MIN_CANDLES,
+    RSI_OVERBOUGHT,
     RSI_OVERSOLD,
     RSI_PERIOD,
     VOLUME_LOOKBACK,
@@ -190,6 +191,19 @@ def _rule_signal(rule: str, window: list, rsi: list = None):
     """
     closes = [row["close"] for row in window]
     if rule == "shipped":
+        # Production is still what decides; this only skips calling it when
+        # its own RSI precondition cannot hold. `evaluate_signal` returns a
+        # signal only on a threshold crossing, so a candle without one would
+        # cost a 101-candle Decimal RSI recomputation to learn nothing.
+        # Equivalence is pinned candle-by-candle against production in
+        # test_the_shipped_rule_short_circuit_never_changes_which_signals_fire.
+        if rsi is not None:
+            current, previous = rsi[-1], rsi[-2]
+            if current is None or previous is None:
+                return None
+            if not (previous < RSI_OVERSOLD <= current
+                    or previous > RSI_OVERBOUGHT >= current):
+                return None
         return evaluate_signal(window)
 
     rsi = rsi if rsi is not None else compute_rsi(closes, RSI_PERIOD)
