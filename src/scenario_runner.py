@@ -94,7 +94,7 @@ def _window_rejection(klines: list, timeframe: str, current_boundary: datetime):
     return None
 
 
-def process_symbol_scenario(session, symbol: str, regime: str, timeframe: str = "1h", now: datetime = None) -> str:
+def process_symbol_scenario(session, symbol: str, regime: str | None, timeframe: str = "1h", now: datetime = None) -> str:
     now = now if now is not None else utc_now()
     current_boundary = floor_to_timeframe(now, timeframe)
     klines = _load_recent_klines(session, symbol, timeframe, SCENARIO_LOOKBACK, current_boundary)
@@ -129,6 +129,10 @@ def process_symbol_scenario(session, symbol: str, regime: str, timeframe: str = 
 def run_scenario_generation(session, symbols: list, now: datetime = None) -> ScenarioRunResult:
     now = now if now is not None else utc_now()
     regime = compute_btc_regime(session, now)
+    if regime is None:
+        logger.warning("BTC regime undetermined — no scenarios will be generated this run")
+    else:
+        logger.info("BTC regime: %s", regime)
     scanned = 0
     generated = 0
     skipped = 0

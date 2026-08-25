@@ -367,3 +367,16 @@ def test_run_scenario_generation_applies_regime_to_every_symbol(db_session):
     assert result.generated == 0
     assert result.skipped == 2
     assert db_session.query(Scenario).count() == 0
+
+
+def test_run_scenario_generation_generates_nothing_when_btc_regime_is_undetermined(db_session):
+    # Real signal-eligible BTCUSDT, but no BTC daily regime data seeded at
+    # all -- compute_btc_regime genuinely returns None here, exercised
+    # through run_scenario_generation's own regime resolution (not by
+    # passing regime=None directly to process_symbol_scenario).
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+
+    result = run_scenario_generation(db_session, ["BTCUSDT"], now=NOW)
+
+    assert result.generated == 0
+    assert db_session.query(Scenario).count() == 0

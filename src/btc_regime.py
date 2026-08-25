@@ -32,7 +32,7 @@ def _load_closed_btc_klines(session, before: datetime) -> list:
     return rows
 
 
-def compute_btc_regime(session, now: datetime = None):
+def compute_btc_regime(session, now: datetime = None) -> str | None:
     """BTC's 1d trend direction: "up" (EMA9 > EMA21), "down", or None if it
     can't be determined (insufficient, non-contiguous, stale, or
     anomaly-flagged data). None must block every symbol's scenario
