@@ -10,7 +10,7 @@ from src.outcome_evaluator import evaluate_outcome
 from src.paper_trading_config import TAKER_FEE_RATE
 from src.indicators import compute_ema, compute_rsi, detect_confluence_in_window
 from src.scenario_runner import SCENARIO_LOOKBACK, _window_rejection
-from src.scenario_builder import build_scenario
+from src.scenario_builder import MAX_EXPIRY_HOURS, build_scenario
 from src.scenario_signal import (
     CONFLUENCE_WINDOW,
     EMA_FAST_PERIOD,
@@ -266,31 +266,35 @@ def is_locked(live_until: dict, direction: str, now) -> bool:
     return expiry is not None and now < expiry
 
 
-def backtest_symbol(symbol: str, klines: list, rule: str,
-                    min_stop_pct=None, min_rr=None, regime_at=None,
-                    start_after=None) -> RuleResult:
-    """Replay one rule over one symbol.
+@dataclass
+class ScenarioEvent:
+    """One outcome of evaluating a rule at a single candle boundary.
 
-    `regime_at(now)` supplies BTC's daily regime the way
-    `run_scenario_generation` computes it once per run; leave it None to
-    measure a rule with the regime gate lifted.
+    `kind` is "draft" when a scenario was produced, or the reason it was not:
+    "regime_blocked" or "no_levels".
+    """
+    kind: str
+    now: object
+    direction: str
+    draft: object = None
+    future: object = None
 
-    `start_after` scores only signals at or after that moment, while still
-    reading indicator history from before it — the boundary for an
-    out-of-sample run.
+
+# Longest a scenario can live, plus slack — bounds the future slice so scoring
+# a week-long scenario does not walk two years of candles.
+FUTURE_HORIZON = MAX_EXPIRY_HOURS + 10
+
+
+def iter_scenarios(symbol: str, klines: list, rule: str, regime_at=None, start_after=None):
+    """Every scenario `rule` would create over `klines`, in order.
+
+    The single walk shared by the backtest and the walk-forward runner. A
+    second copy of this loop is how the funnel table and the backtest came to
+    apply different gates, so callers filter the events rather than re-deriving
+    them.
     """
     step = TIMEFRAME_DELTAS["1h"]
-    result = RuleResult()
     rsi_series = compute_rsi([row["close"] for row in klines], RSI_PERIOD)
-    # Mirrors `has_pending_scenario`: one live scenario per direction at a
-    # time. Without it a single EMA cross is counted three times, because
-    # `detect_confluence_in_window` reports it for CONFLUENCE_WINDOW candles.
-    #
-    # Held until expiry, where production releases it as soon as the scenario
-    # resolves. That is the conservative direction — it can only skip
-    # signals, never invent them — and per-trade expectancy, the number this
-    # tool exists to compare, is unaffected by how many are skipped.
-    live_until = {}
     for end in range(MIN_CANDLES, len(klines) + 1):
         window = klines[max(0, end - SCENARIO_LOOKBACK):end]
         # The scenario is created just after the signal candle closes, exactly
@@ -307,21 +311,60 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
         if signal is None:
             continue
         if regime_at is not None and not _regime_allows(regime_at(now), signal.direction):
-            result.regime_blocked += 1
+            yield ScenarioEvent("regime_blocked", now, signal.direction)
             continue
-        if is_locked(live_until, signal.direction, now):
-            continue
-        result.signals += 1
+
         draft = build_scenario(symbol, signal, window, now)
         if draft is None:
+            yield ScenarioEvent("no_levels", now, signal.direction)
+            continue
+        yield ScenarioEvent("draft", now, signal.direction, draft, klines[end:end + FUTURE_HORIZON])
+
+
+def backtest_symbol(symbol: str, klines: list, rule: str,
+                    min_stop_pct=None, min_rr=None, regime_at=None,
+                    start_after=None) -> RuleResult:
+    """Replay one rule over one symbol.
+
+    `regime_at(now)` supplies BTC's daily regime the way
+    `run_scenario_generation` computes it once per run; leave it None to
+    measure a rule with the regime gate lifted.
+
+    `start_after` scores only signals at or after that moment, while still
+    reading indicator history from before it — the boundary for an
+    out-of-sample run.
+    """
+    result = RuleResult()
+    # Mirrors `has_pending_scenario`: one live scenario per direction at a
+    # time. Without it a single EMA cross is counted three times, because
+    # `detect_confluence_in_window` reports it for CONFLUENCE_WINDOW candles.
+    #
+    # Held until expiry, where production releases it as soon as the scenario
+    # resolves. That is the conservative direction — it can only skip signals,
+    # never invent them — and per-trade expectancy, the number this tool exists
+    # to compare, is unaffected by how many are skipped.
+    live_until = {}
+    for event in iter_scenarios(symbol, klines, rule, regime_at, start_after):
+        # `regime_blocked` is counted apart from `signals`: the gate rejects
+        # the signal outright, so it never becomes one. A signal that finds no
+        # support/resistance levels DID fire and is counted.
+        if event.kind == "regime_blocked":
+            result.regime_blocked += 1
+            continue
+        if is_locked(live_until, event.direction, event.now):
+            continue
+        result.signals += 1
+        if event.kind == "no_levels":
             result.no_levels += 1
             continue
+
+        draft = event.draft
         if not passes_risk_filters(draft, min_stop_pct, min_rr):
             result.filtered += 1
             continue
-        live_until[signal.direction] = draft.expires_at
+        live_until[event.direction] = draft.expires_at
 
-        scored = resolve_draft(draft, klines[end:])
+        scored = resolve_draft(draft, event.future)
         if scored is None:
             result.unscored += 1
             continue

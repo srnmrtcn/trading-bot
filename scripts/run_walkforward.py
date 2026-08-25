@@ -20,14 +20,11 @@ from decimal import Decimal
 from src.btc_regime import compute_btc_regime
 from src.db.models import Kline
 from src.db.session import make_engine, make_session_factory
-from src.integrity import TIMEFRAME_DELTAS
 from src.paper_trading_config import TAKER_FEE_RATE
 from src.research.funnel import (
-    MIN_CANDLES, SCENARIO_LOOKBACK, RSI_PERIOD, _regime_allows, _rsi_for_window,
-    _rule_signal, _window_rejection, compute_rsi, fee_cost_in_r, is_locked,
+    FUTURE_HORIZON, MIN_CANDLES, fee_cost_in_r, is_locked, iter_scenarios,
     passes_risk_filters, resolve_draft,
 )
-from src.scenario_builder import MAX_EXPIRY_HOURS, build_scenario
 from scripts.run_backtest import make_regime_lookup
 from scripts.run_funnel import RESEARCH_DB_URL, load_klines
 
@@ -37,35 +34,17 @@ MIN_RRS = [None, Decimal("1.0"), Decimal("1.5"), Decimal("2.0")]
 # A configuration with fewer resolved trades than this in training is not
 # evidence of anything and is never carried to the test period.
 MIN_TRAIN_TRADES = 100
-# Longest a scenario can live (scenario_builder.MAX_EXPIRY_HOURS), plus slack.
-# Bounds the slice handed to resolve_draft so it does not walk two years of
-# candles to score a scenario that expires within a week.
-FUTURE_HORIZON = MAX_EXPIRY_HOURS + 10
-
-
 def collect_drafts(series, rule, regime_at):
     """Every draft `rule` would produce, with the candles that follow it.
 
     Built once per rule; the filter grid then replays this list, which is what
     keeps a 48-cell sweep to minutes instead of hours.
     """
-    step = TIMEFRAME_DELTAS["1h"]
     drafts = []
     for symbol, klines in series.items():
-        rsi_series = compute_rsi([row["close"] for row in klines], RSI_PERIOD)
-        for end in range(MIN_CANDLES, len(klines) + 1):
-            window = klines[max(0, end - SCENARIO_LOOKBACK):end]
-            now = window[-1]["open_time"] + step
-            if _window_rejection(window, "1h", now) is not None:
-                continue
-            signal = _rule_signal(rule, window, _rsi_for_window(rsi_series, end, len(window)))
-            if signal is None:
-                continue
-            if not _regime_allows(regime_at(now), signal.direction):
-                continue
-            draft = build_scenario(symbol, signal, window, now)
-            if draft is not None:
-                drafts.append((symbol, now, draft, klines[end:end + FUTURE_HORIZON]))
+        for event in iter_scenarios(symbol, klines, rule, regime_at):
+            if event.kind == "draft":
+                drafts.append((symbol, event.now, event.draft, event.future))
     return drafts
 
 

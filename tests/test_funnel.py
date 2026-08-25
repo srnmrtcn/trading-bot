@@ -8,6 +8,7 @@ from src.research.funnel import (
     backtest_symbol,
     fee_cost_in_r,
     is_locked,
+    iter_scenarios,
     passes_risk_filters,
     resolve_draft,
 )
@@ -316,3 +317,24 @@ def test_the_backtest_can_score_only_signals_after_a_cutoff():
     assert backtest_symbol(
         "TESTUSDT", klines, "trend", start_after=signal_time + timedelta(hours=1),
     ).signals == 0
+
+
+def test_iter_scenarios_reports_why_a_signal_produced_no_draft():
+    """One iteration path, consumed by both the backtest and the walk-forward
+    runner. The two had drifted apart once already — the funnel table skipped
+    a gate the backtest applied — and a second copy of this loop is how that
+    happens again.
+
+    Rejections are yielded rather than swallowed so callers can tally where
+    signals die without re-deriving the reason.
+    """
+    closes = [round(100 + i * 0.5, 2) for i in range(80)]
+    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
+    closes += [round(closes[-1] + 1, 2)]
+    klines = _series(closes)
+
+    kinds = [e.kind for e in iter_scenarios("TESTUSDT", klines, "trend")]
+    assert kinds == ["no_levels"], "a monotonic rally has no swing high above entry"
+
+    blocked = [e.kind for e in iter_scenarios("TESTUSDT", klines, "trend", regime_at=lambda n: "down")]
+    assert blocked == ["regime_blocked"]
