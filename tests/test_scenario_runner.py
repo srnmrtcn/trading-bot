@@ -98,13 +98,13 @@ def _seed_signal_klines(
 
 def test_process_symbol_scenario_skips_with_insufficient_data(db_session):
     _insert_flat_klines(db_session, "BTCUSDT", MIN_CANDLES - 1)
-    outcome = process_symbol_scenario(db_session, "BTCUSDT", now=NOW)
+    outcome = process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW)
     assert outcome == "skipped"
 
 
 def test_process_symbol_scenario_skips_when_no_signal(db_session):
     _insert_flat_klines(db_session, "BTCUSDT", MIN_CANDLES)
-    outcome = process_symbol_scenario(db_session, "BTCUSDT", now=NOW)
+    outcome = process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW)
     assert outcome == "skipped"
     assert db_session.query(Scenario).count() == 0
 
@@ -114,7 +114,7 @@ def test_process_symbol_scenario_generates_a_scenario_from_a_real_signal(db_sess
     has_pending_scenario -> insert_scenario -> a persisted row."""
     _seed_signal_klines(db_session)
 
-    outcome = process_symbol_scenario(db_session, "BTCUSDT", now=NOW)
+    outcome = process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW)
 
     assert outcome == "generated"
     row = db_session.query(Scenario).one()
@@ -135,7 +135,7 @@ def test_process_symbol_scenario_ignores_the_in_progress_candle(db_session):
     an unclosed candle's price in `entry_price`."""
     _seed_signal_klines(db_session)
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "generated"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
 
     row = db_session.query(Scenario).one()
     # The last CLOSED candle's close, not the still-forming candle's.
@@ -147,8 +147,8 @@ def test_process_symbol_scenario_skips_when_a_live_pending_scenario_exists(db_se
     """The dedup path must fire against a real persisted row, not a stub."""
     _seed_signal_klines(db_session)
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "generated"
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "skipped"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
     assert db_session.query(Scenario).count() == 1
 
 
@@ -164,7 +164,7 @@ def test_process_symbol_scenario_regenerates_after_the_pending_scenario_expired(
     ))
     db_session.commit()
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "generated"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
     assert db_session.query(Scenario).count() == 2
 
 
@@ -179,7 +179,7 @@ def test_process_symbol_scenario_skips_stale_data(db_session):
         db_session, boundary=BOUNDARY - timedelta(hours=3), include_in_progress=False,
     )
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "skipped"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
     assert db_session.query(Scenario).count() == 0
 
 
@@ -188,7 +188,7 @@ def test_process_symbol_scenario_accepts_a_symbol_with_no_in_progress_candle_yet
     not yet stored the current candle is still perfectly fresh."""
     _seed_signal_klines(db_session, include_in_progress=False)
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "generated"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
 
 
 def test_process_symbol_scenario_skips_when_recent_window_has_a_gap(db_session):
@@ -196,7 +196,7 @@ def test_process_symbol_scenario_skips_when_recent_window_has_a_gap(db_session):
     candles must not be fed to RSI/EMA/ATR as if they were consecutive."""
     _seed_signal_klines(db_session, drop_index=10)
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "skipped"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
     assert db_session.query(Scenario).count() == 0
 
 
@@ -205,7 +205,7 @@ def test_process_symbol_scenario_skips_when_a_recent_candle_is_flagged(db_sessio
     the shape that manufactures a spurious RSI + EMA cross."""
     _seed_signal_klines(db_session, flag_index=50)
 
-    assert process_symbol_scenario(db_session, "BTCUSDT", now=NOW) == "skipped"
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
     assert db_session.query(Scenario).count() == 0
 
 
@@ -261,3 +261,60 @@ def test_run_scenario_generation_counts_generated(db_session, monkeypatch):
     assert result.generated == 1
     assert result.skipped == 0
     assert result.failed == 0
+
+
+def test_process_symbol_scenario_skips_long_signal_when_regime_is_down(db_session):
+    # BTCUSDT itself is filtered too -- no exemption for the regime's own symbol.
+    _seed_signal_klines(db_session)
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="down", now=NOW) == "skipped"
+    assert db_session.query(Scenario).count() == 0
+
+
+def test_process_symbol_scenario_skips_any_signal_when_regime_is_none(db_session):
+    _seed_signal_klines(db_session)
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime=None, now=NOW) == "skipped"
+    assert db_session.query(Scenario).count() == 0
+
+
+def test_process_symbol_scenario_skips_short_signal_when_regime_is_up(db_session, monkeypatch):
+    import src.scenario_runner as scenario_runner_module
+    from src.scenario_signal import SignalResult
+
+    _insert_flat_klines(db_session, "BTCUSDT", MIN_CANDLES)
+    monkeypatch.setattr(
+        scenario_runner_module, "evaluate_signal",
+        lambda klines: SignalResult(
+            direction="short", entry_price=Decimal("100"),
+            rsi=Decimal("65"), previous_rsi=Decimal("72"),
+        ),
+    )
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
+    assert db_session.query(Scenario).count() == 0
+
+
+def test_process_symbol_scenario_accepts_short_signal_when_regime_is_down(db_session, monkeypatch):
+    import src.scenario_runner as scenario_runner_module
+    from src.scenario_builder import ScenarioDraft
+    from src.scenario_signal import SignalResult
+
+    _insert_flat_klines(db_session, "BTCUSDT", MIN_CANDLES)
+    monkeypatch.setattr(
+        scenario_runner_module, "evaluate_signal",
+        lambda klines: SignalResult(
+            direction="short", entry_price=Decimal("100"),
+            rsi=Decimal("65"), previous_rsi=Decimal("72"),
+        ),
+    )
+    draft = ScenarioDraft(
+        symbol="BTCUSDT", direction="short",
+        entry_price=Decimal("100"), target_price=Decimal("90"), stop_price=Decimal("110"),
+        expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
+        created_at=NOW, expires_at=NOW + timedelta(hours=24),
+    )
+    monkeypatch.setattr(scenario_runner_module, "build_scenario", lambda symbol, signal, klines, now: draft)
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="down", now=NOW) == "generated"
+    assert db_session.query(Scenario).count() == 1

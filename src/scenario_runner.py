@@ -93,7 +93,7 @@ def _window_rejection(klines: list, timeframe: str, current_boundary: datetime):
     return None
 
 
-def process_symbol_scenario(session, symbol: str, timeframe: str = "1h", now: datetime = None) -> str:
+def process_symbol_scenario(session, symbol: str, regime: str, timeframe: str = "1h", now: datetime = None) -> str:
     now = now if now is not None else utc_now()
     current_boundary = floor_to_timeframe(now, timeframe)
     klines = _load_recent_klines(session, symbol, timeframe, SCENARIO_LOOKBACK, current_boundary)
@@ -105,6 +105,13 @@ def process_symbol_scenario(session, symbol: str, timeframe: str = "1h", now: da
 
     signal = evaluate_signal(klines)
     if signal is None:
+        return "skipped"
+
+    if regime is None:
+        return "skipped"
+    if signal.direction == "long" and regime != "up":
+        return "skipped"
+    if signal.direction == "short" and regime != "down":
         return "skipped"
 
     if has_pending_scenario(session, symbol, signal.direction, now):
