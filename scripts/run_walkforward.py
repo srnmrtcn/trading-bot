@@ -13,6 +13,7 @@ the split is noise, however good it looks.
 from __future__ import annotations
 
 import argparse
+import statistics
 import sys
 import time
 from datetime import timedelta
@@ -50,8 +51,14 @@ def collect_drafts(series, rule, regime_at):
 
 
 def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
-    """Replay collected drafts under one filter setting. Returns (n, net_r)."""
-    live, trades, net = {}, 0, Decimal("0")
+    """Replay collected drafts under one filter setting.
+
+    Returns the per-trade net R values rather than a total: a mean without its
+    spread is unreadable. On this data the best out-of-sample cell came in at
+    +0.007R with a 95% interval of [-0.221, +0.236] — a number that looks like
+    an edge and is indistinguishable from zero.
+    """
+    live, results = {}, []
     for symbol, now, draft, future in drafts:
         if start_after is not None and now < start_after:
             continue
@@ -67,11 +74,22 @@ def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
         if outcome is None:
             continue
         risk = abs(draft.entry_price - draft.stop_price)
-        trades += 1
-        net += outcome.r_multiple - fee_cost_in_r(
+        results.append(float(outcome.r_multiple - fee_cost_in_r(
             draft.entry_price, outcome.exit_price, risk, TAKER_FEE_RATE,
-        )
-    return trades, net
+        )))
+    return results
+
+
+def summarise(results):
+    """(n, mean R, half-width of the 95% interval). Half-width is None below
+    two trades, where a spread is undefined."""
+    n = len(results)
+    if n == 0:
+        return 0, None, None
+    mean = statistics.mean(results)
+    if n < 2:
+        return n, mean, None
+    return n, mean, 1.96 * statistics.stdev(results) / (n ** 0.5)
 
 
 def main(argv=None) -> int:
@@ -102,7 +120,7 @@ def main(argv=None) -> int:
               f"min {MIN_TRAIN_TRADES} train islemi\n")
 
         header = (f"{'KURAL':<9} {'SECILEN AYAR':<22} {'TRAIN n':>8} {'TRAIN R/isl':>12} "
-                  f"{'TEST n':>7} {'TEST R/isl':>11}")
+                  f"{'TEST n':>7}  {'TEST R/isl (%95 GA)'}")
         print(header)
         print("-" * len(header))
 
@@ -114,11 +132,10 @@ def main(argv=None) -> int:
             best, eligible = None, 0
             for stop in MIN_STOP_PCTS:
                 for rr in MIN_RRS:
-                    n, net = score(drafts, stop, rr, until=boundary)
+                    n, expectancy, _ = summarise(score(drafts, stop, rr, until=boundary))
                     if n < MIN_TRAIN_TRADES:
                         continue
                     eligible += 1
-                    expectancy = net / n
                     if best is None or expectancy > best[0]:
                         best = (expectancy, stop, rr, n)
             if best is None:
@@ -128,11 +145,18 @@ def main(argv=None) -> int:
 
             train_exp, stop, rr, train_n = best
             # The only time this configuration meets the test period.
-            test_n, test_net = score(drafts, stop, rr, start_after=boundary)
+            test_n, test_exp, half = summarise(score(drafts, stop, rr, start_after=boundary))
             label = f"stop>={stop} rr>={rr}"
-            test_cell = f"{test_net / test_n:>11.3f}" if test_n else f"{'n=0':>11}"
-            print(f"{rule:<9} {label:<22} {train_n:>8} {train_exp:>12.3f} {test_n:>7} {test_cell}"
-                  f"   ({eligible} uygun hucre)")
+            if test_n == 0:
+                verdict = "n=0"
+            elif half is None:
+                verdict = f"{test_exp:+.3f}"
+            else:
+                low, high = test_exp - half, test_exp + half
+                sign = "ZARARDA" if high < 0 else ("KARDA" if low > 0 else "sifirdan ayirt edilemez")
+                verdict = f"{test_exp:+.3f} [{low:+.3f},{high:+.3f}] {sign}"
+            print(f"{rule:<9} {label:<22} {train_n:>8} {train_exp:>12.3f} {test_n:>7}  {verdict}"
+                  f"   ({eligible} hucre denendi)", flush=True)
     finally:
         session.close()
     return 0
