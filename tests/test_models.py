@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from src.db.models import Symbol, Kline, FetchLog, Scenario
+from src.db.models import Symbol, Kline, FetchLog, Scenario, FundingRate
 
 
 def test_insert_symbol(db_session):
@@ -164,3 +164,29 @@ def test_paper_position_defaults_and_unique_scenario_constraint(db_session):
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+def test_symbol_has_futures_contract_defaults_to_false_and_allows_null(db_session):
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    db_session.commit()
+    assert db_session.get(Symbol, "BTCUSDT").has_futures_contract is False
+
+    # Nullable is a hard requirement: sync_missing_columns only ever adds
+    # nullable columns to a live database, so a NOT NULL column here would
+    # break every query against `symbols` on the deployed service.
+    db_session.add(Symbol(
+        symbol="NULLUSDT", base_asset="NULL", quote_asset="USDT",
+        is_active=True, has_futures_contract=None,
+    ))
+    db_session.commit()
+    assert db_session.get(Symbol, "NULLUSDT").has_futures_contract is None
+
+
+def test_funding_rate_row_stores_one_row_per_symbol(db_session):
+    now = datetime(2026, 8, 25, 12, 0)
+    db_session.add(FundingRate(symbol="BTCUSDT", funding_rate=Decimal("0.00012345"), fetched_at=now))
+    db_session.commit()
+
+    row = db_session.get(FundingRate, "BTCUSDT")
+    assert row.funding_rate == Decimal("0.00012345")
+    assert row.fetched_at == now

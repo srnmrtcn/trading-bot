@@ -13,6 +13,11 @@ class Symbol(Base):
     base_asset = Column(String, nullable=False)
     quote_asset = Column(String, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True)
+    # Nullable is mandatory, not a style choice: sync_missing_columns (see
+    # src/db/session.py) only ever ADDs nullable columns to a live database.
+    # A NOT NULL column here would be skipped there, and every ORM query
+    # against `symbols` would then fail on the deployed service.
+    has_futures_contract = Column(Boolean, nullable=True, default=False)
     listed_at = Column(DateTime, nullable=True)
     # utc_now() returns a naive UTC datetime, matching this naive DateTime
     # column. A tz-aware value here would be converted using the server's
@@ -87,3 +92,13 @@ class PaperPosition(Base):
     realized_pnl = Column(Numeric(20, 8), nullable=True)
     equity_before = Column(Numeric(20, 8), nullable=True)
     equity_after = Column(Numeric(20, 8), nullable=True)
+
+
+class FundingRate(Base):
+    __tablename__ = "funding_rates"
+
+    # One row per symbol: only the latest print matters to the gate, so this
+    # is a "last known value" table, not an append-only history.
+    symbol = Column(String, primary_key=True)
+    funding_rate = Column(Numeric(10, 8), nullable=False)
+    fetched_at = Column(DateTime, nullable=False)
