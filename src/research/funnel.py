@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from datetime import timedelta
+from decimal import Decimal
+
+from src.integrity import TIMEFRAME_DELTAS
+from src.outcome_evaluator import evaluate_outcome
+from src.indicators import compute_ema, compute_rsi, detect_confluence_in_window
+from src.scenario_runner import SCENARIO_LOOKBACK, _window_rejection
+from src.scenario_builder import build_scenario
+from src.scenario_signal import (
+    CONFLUENCE_WINDOW,
+    EMA_FAST_PERIOD,
+    EMA_SLOW_PERIOD,
+    MIN_CANDLES,
+    RSI_OVERSOLD,
+    RSI_PERIOD,
+    VOLUME_LOOKBACK,
+    VOLUME_MULTIPLIER,
+    SignalResult,
+    evaluate_signal,
+)
+
+
+# How long rule C waits for the EMA/volume confirmation to follow the RSI
+# cross. The shipped rule effectively allows 0 — it demands both on one
+# candle — which is what closes the funnel.
+DELAYED_CONFIRM_WINDOW = 15
+
+
+@dataclass
+class FunnelCounts:
+    evaluated: int = 0
+    rsi_cross_up: int = 0
+    confluence_bullish: int = 0
+    signal_long: int = 0
+    # Candidate rule B: RSI cross-up while the trend is already up.
+    signal_long_trend_aligned: int = 0
+    # Candidate rule C: confirmation arrives after the bounce, not with it.
+    signal_long_delayed_confirm: int = 0
+
+
+def _crossed_up_recently(rsi: list, window: int) -> bool:
+    """Did RSI cross up through the oversold line within the last `window`
+    closed candles? Read off the RSI series itself, so no state has to be
+    carried between evaluation points."""
+    for index in range(len(rsi) - 1, max(len(rsi) - 1 - window, 0), -1):
+        current, previous = rsi[index], rsi[index - 1]
+        if current is None or previous is None:
+            continue
+        if previous < RSI_OVERSOLD <= current:
+            return True
+    return False
+
+
+def analyze_symbol(klines: list) -> FunnelCounts:
+    counts = FunnelCounts()
+    for end in range(MIN_CANDLES, len(klines) + 1):
+        window = klines[max(0, end - SCENARIO_LOOKBACK):end]
+        counts.evaluated += 1
+
+        closes = [row["close"] for row in window]
+        volumes = [row["volume"] for row in window]
+
+        rsi = compute_rsi(closes, RSI_PERIOD)
+        current, previous = rsi[-1], rsi[-2]
+        rsi_up = (
+            current is not None and previous is not None
+            and previous < RSI_OVERSOLD <= current
+        )
+        if rsi_up:
+            counts.rsi_cross_up += 1
+
+        ema_fast = compute_ema(closes, EMA_FAST_PERIOD)
+        ema_slow = compute_ema(closes, EMA_SLOW_PERIOD)
+        crossover = detect_confluence_in_window(
+            ema_fast, ema_slow,
+            volumes, VOLUME_LOOKBACK, VOLUME_MULTIPLIER, CONFLUENCE_WINDOW,
+        )
+        trend_up = (
+            ema_fast[-1] is not None and ema_slow[-1] is not None
+            and ema_fast[-1] > ema_slow[-1]
+        )
+        if rsi_up and trend_up:
+            counts.signal_long_trend_aligned += 1
+
+        if crossover == "bullish" and _crossed_up_recently(rsi, DELAYED_CONFIRM_WINDOW):
+            counts.signal_long_delayed_confirm += 1
+        if crossover == "bullish":
+            counts.confluence_bullish += 1
+
+        # Delegated rather than reimplemented: the whole point is to measure
+        # the production rule, so any drift here would measure a fiction.
+        signal = evaluate_signal(window)
+        if signal is not None and signal.direction == "long":
+            counts.signal_long += 1
+    return counts
+
+
+def resolve_draft(draft, future_klines: list):
+    """Score a draft against the candles that followed it: `(status, r_multiple)`.
+
+    R is measured in units of the trade's own risk, so scenarios with wildly
+    different stop distances stay comparable.
+    """
+    step = TIMEFRAME_DELTAS["1h"]
+    # Unfinished scenarios are dropped, not scored — see the test.
+    if not future_klines or future_klines[-1]["open_time"] + step < draft.expires_at:
+        return None
+
+    risk = abs(draft.entry_price - draft.stop_price)
+    outcome = evaluate_outcome(
+        draft.direction, draft.target_price, draft.stop_price,
+        draft.expires_at, future_klines, draft.expires_at + step,
+    )
+    status, _resolved_at = outcome
+    if status == "hit_stop":
+        return status, Decimal("-1")
+    if status == "hit_target":
+        return status, abs(draft.target_price - draft.entry_price) / risk
+
+    # Expired: worth its unrealised move at the last candle that closed
+    # before expiry, mirroring paper_position_closer's exit rule.
+    before_expiry = [row for row in future_klines if row["open_time"] < draft.expires_at]
+    if not before_expiry:
+        # A data gap swallowed the whole life of the scenario: there is no
+        # candle to read an exit price from, so it cannot be scored.
+        return None
+    exit_price = before_expiry[-1]["close"]
+    move = (
+        exit_price - draft.entry_price if draft.direction == "long"
+        else draft.entry_price - exit_price
+    )
+    return status, move / risk
+
+
+# Binance USDT-M perpetual taker fee, both legs. Paper trading books none
+# of this today, which is why every measured edge here is reported twice.
+FEE_ROUND_TRIP = Decimal("0.001")
+
+
+def fee_cost_in_r(entry_price: Decimal, risk: Decimal, fee_rate: Decimal) -> Decimal:
+    """What a round trip costs in units of the trade's own risk."""
+    return entry_price * fee_rate / risk
+
+
+@dataclass
+class RuleResult:
+    signals: int = 0
+    no_levels: int = 0
+    filtered: int = 0
+    unscored: int = 0
+    hit_target: int = 0
+    hit_stop: int = 0
+    expired: int = 0
+    total_r: Decimal = Decimal("0")
+    total_fee_r: Decimal = Decimal("0")
+
+
+def _rule_signal(rule: str, window: list):
+    """The SignalResult a candidate rule would produce at this window's end.
+
+    "shipped" delegates to production. The candidates reuse the same RSI and
+    EMA inputs and differ only in how they combine them.
+    """
+    closes = [row["close"] for row in window]
+    if rule == "shipped":
+        return evaluate_signal(window)
+
+    rsi = compute_rsi(closes, RSI_PERIOD)
+    current, previous = rsi[-1], rsi[-2]
+    if current is None or previous is None:
+        return None
+
+    if rule == "trend":
+        ema_fast = compute_ema(closes, EMA_FAST_PERIOD)
+        ema_slow = compute_ema(closes, EMA_SLOW_PERIOD)
+        fires = (
+            previous < RSI_OVERSOLD <= current
+            and ema_fast[-1] is not None and ema_slow[-1] is not None
+            and ema_fast[-1] > ema_slow[-1]
+        )
+    elif rule == "delayed":
+        crossover = detect_confluence_in_window(
+            compute_ema(closes, EMA_FAST_PERIOD), compute_ema(closes, EMA_SLOW_PERIOD),
+            [row["volume"] for row in window], VOLUME_LOOKBACK, VOLUME_MULTIPLIER,
+            CONFLUENCE_WINDOW,
+        )
+        fires = crossover == "bullish" and _crossed_up_recently(rsi, DELAYED_CONFIRM_WINDOW)
+    else:
+        raise ValueError("unknown rule: %r" % rule)
+
+    if not fires:
+        return None
+    return SignalResult(
+        direction="long", entry_price=closes[-1], rsi=current, previous_rsi=previous,
+    )
+
+
+def passes_risk_filters(draft, min_stop_pct, min_rr) -> bool:
+    """Would this draft survive the two guards `build_scenario` is missing?
+
+    Both are opt-in (None disables) so the replay can measure the shipped
+    behaviour and a candidate fix side by side.
+    """
+    risk = abs(draft.entry_price - draft.stop_price)
+    if risk == 0:
+        return False
+    if min_stop_pct is not None and risk / draft.entry_price < min_stop_pct:
+        return False
+    if min_rr is not None and abs(draft.target_price - draft.entry_price) / risk < min_rr:
+        return False
+    return True
+
+
+def is_locked(live_until: dict, direction: str, now) -> bool:
+    """Is a scenario in this direction still live at `now`?"""
+    expiry = live_until.get(direction)
+    return expiry is not None and now < expiry
+
+
+def backtest_symbol(symbol: str, klines: list, rule: str,
+                    min_stop_pct=None, min_rr=None) -> RuleResult:
+    step = TIMEFRAME_DELTAS["1h"]
+    result = RuleResult()
+    # Mirrors `has_pending_scenario`: one live scenario per direction at a
+    # time. Without it a single EMA cross is counted three times, because
+    # `detect_confluence_in_window` reports it for CONFLUENCE_WINDOW candles.
+    #
+    # Held until expiry, where production releases it as soon as the scenario
+    # resolves. That is the conservative direction — it can only skip
+    # signals, never invent them — and per-trade expectancy, the number this
+    # tool exists to compare, is unaffected by how many are skipped.
+    live_until = {}
+    for end in range(MIN_CANDLES, len(klines) + 1):
+        window = klines[max(0, end - SCENARIO_LOOKBACK):end]
+        # The scenario is created just after the signal candle closes, exactly
+        # as the hourly job does — never on the candle it was read from.
+        now = window[-1]["open_time"] + step
+        # Same gate production applies: stale, gapped or anomaly-flagged
+        # windows are never read for indicators.
+        if _window_rejection(window, "1h", now) is not None:
+            continue
+
+        signal = _rule_signal(rule, window)
+        if signal is None:
+            continue
+        if is_locked(live_until, signal.direction, now):
+            continue
+        result.signals += 1
+        draft = build_scenario(symbol, signal, window, now)
+        if draft is None:
+            result.no_levels += 1
+            continue
+        if not passes_risk_filters(draft, min_stop_pct, min_rr):
+            result.filtered += 1
+            continue
+        live_until[signal.direction] = draft.expires_at
+
+        scored = resolve_draft(draft, klines[end:])
+        if scored is None:
+            result.unscored += 1
+            continue
+        status, r_multiple = scored
+        setattr(result, status, getattr(result, status) + 1)
+        result.total_r += r_multiple
+        result.total_fee_r += fee_cost_in_r(
+            draft.entry_price, abs(draft.entry_price - draft.stop_price), FEE_ROUND_TRIP,
+        )
+    return result
