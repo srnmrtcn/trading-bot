@@ -294,3 +294,25 @@ def test_the_backtest_honours_the_btc_regime_gate():
     assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: "up").signals == 1
     assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: "down").signals == 0
     assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: None).signals == 0
+
+
+def test_the_backtest_can_score_only_signals_after_a_cutoff():
+    """Out-of-sample evaluation needs a time boundary, not a shorter series.
+
+    Truncating the klines instead would deny the first ~100 candles after the
+    cutoff the history their indicators need, so the test period would open
+    with a blind spot exactly where the comparison starts. `start_after` keeps
+    the full series available as context and only scores what happens after
+    the boundary.
+    """
+    closes = [round(100 + i * 0.5, 2) for i in range(80)]
+    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
+    closes += [round(closes[-1] + 1, 2)]
+    klines = _series(closes)
+    signal_time = klines[-1]["open_time"] + timedelta(hours=1)
+
+    assert backtest_symbol("TESTUSDT", klines, "trend").signals == 1
+    assert backtest_symbol("TESTUSDT", klines, "trend", start_after=signal_time).signals == 1
+    assert backtest_symbol(
+        "TESTUSDT", klines, "trend", start_after=signal_time + timedelta(hours=1),
+    ).signals == 0

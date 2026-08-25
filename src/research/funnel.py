@@ -267,12 +267,17 @@ def is_locked(live_until: dict, direction: str, now) -> bool:
 
 
 def backtest_symbol(symbol: str, klines: list, rule: str,
-                    min_stop_pct=None, min_rr=None, regime_at=None) -> RuleResult:
+                    min_stop_pct=None, min_rr=None, regime_at=None,
+                    start_after=None) -> RuleResult:
     """Replay one rule over one symbol.
 
     `regime_at(now)` supplies BTC's daily regime the way
     `run_scenario_generation` computes it once per run; leave it None to
     measure a rule with the regime gate lifted.
+
+    `start_after` scores only signals at or after that moment, while still
+    reading indicator history from before it — the boundary for an
+    out-of-sample run.
     """
     step = TIMEFRAME_DELTAS["1h"]
     result = RuleResult()
@@ -291,6 +296,8 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
         # The scenario is created just after the signal candle closes, exactly
         # as the hourly job does — never on the candle it was read from.
         now = window[-1]["open_time"] + step
+        if start_after is not None and now < start_after:
+            continue
         # Same gate production applies: stale, gapped or anomaly-flagged
         # windows are never read for indicators.
         if _window_rejection(window, "1h", now) is not None:
