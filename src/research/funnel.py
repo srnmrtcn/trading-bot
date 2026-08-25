@@ -177,36 +177,44 @@ class RuleResult:
     total_fee_r: Decimal = Decimal("0")
 
 
-def _rule_signal(rule: str, window: list):
+def _rule_signal(rule: str, window: list, rsi: list = None):
     """The SignalResult a candidate rule would produce at this window's end.
 
     "shipped" delegates to production. The candidates reuse the same RSI and
     EMA inputs and differ only in how they combine them.
+
+    `rsi` may be a precomputed slice ending at this window's last candle —
+    see `_rsi_for_window`. The RSI gates are evaluated before the EMA ones
+    because they are both cheaper and far more selective (~3% of candles), and
+    computing an EMA for a window that cannot fire is most of the runtime.
     """
     closes = [row["close"] for row in window]
     if rule == "shipped":
         return evaluate_signal(window)
 
-    rsi = compute_rsi(closes, RSI_PERIOD)
+    rsi = rsi if rsi is not None else compute_rsi(closes, RSI_PERIOD)
     current, previous = rsi[-1], rsi[-2]
     if current is None or previous is None:
         return None
 
     if rule == "trend":
+        if not previous < RSI_OVERSOLD <= current:
+            return None
         ema_fast = compute_ema(closes, EMA_FAST_PERIOD)
         ema_slow = compute_ema(closes, EMA_SLOW_PERIOD)
         fires = (
-            previous < RSI_OVERSOLD <= current
-            and ema_fast[-1] is not None and ema_slow[-1] is not None
+            ema_fast[-1] is not None and ema_slow[-1] is not None
             and ema_fast[-1] > ema_slow[-1]
         )
     elif rule == "delayed":
+        if not _crossed_up_recently(rsi, DELAYED_CONFIRM_WINDOW):
+            return None
         crossover = detect_confluence_in_window(
             compute_ema(closes, EMA_FAST_PERIOD), compute_ema(closes, EMA_SLOW_PERIOD),
             [row["volume"] for row in window], VOLUME_LOOKBACK, VOLUME_MULTIPLIER,
             CONFLUENCE_WINDOW,
         )
-        fires = crossover == "bullish" and _crossed_up_recently(rsi, DELAYED_CONFIRM_WINDOW)
+        fires = crossover == "bullish"
     else:
         raise ValueError("unknown rule: %r" % rule)
 
@@ -215,6 +223,17 @@ def _rule_signal(rule: str, window: list):
     return SignalResult(
         direction="long", entry_price=closes[-1], rsi=current, previous_rsi=previous,
     )
+
+
+def _rsi_for_window(rsi_series: list, end: int, window_length: int) -> list:
+    """The slice of a whole-series RSI that a window of its own would produce.
+
+    Safe because this RSI is a pure sliding window — `rsi[i]` reads only the
+    `RSI_PERIOD` closes before `i` and carries nothing forward. EMA is
+    recursive from a seed and deliberately stays windowed.
+    See `test_rsi_over_a_window_equals_rsi_over_the_whole_series_at_the_same_point`.
+    """
+    return rsi_series[end - window_length:end]
 
 
 def passes_risk_filters(draft, min_stop_pct, min_rr) -> bool:
@@ -257,6 +276,7 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
     """
     step = TIMEFRAME_DELTAS["1h"]
     result = RuleResult()
+    rsi_series = compute_rsi([row["close"] for row in klines], RSI_PERIOD)
     # Mirrors `has_pending_scenario`: one live scenario per direction at a
     # time. Without it a single EMA cross is counted three times, because
     # `detect_confluence_in_window` reports it for CONFLUENCE_WINDOW candles.
@@ -276,7 +296,7 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
         if _window_rejection(window, "1h", now) is not None:
             continue
 
-        signal = _rule_signal(rule, window)
+        signal = _rule_signal(rule, window, _rsi_for_window(rsi_series, end, len(window)))
         if signal is None:
             continue
         if regime_at is not None and not _regime_allows(regime_at(now), signal.direction):

@@ -109,3 +109,22 @@ def test_detect_confluence_in_window_requires_cross_and_spike_on_the_same_candle
     slow = _decimals([10, 10, 10, 10, 10])
     volumes = _decimals([100, 100, 100, 100, 300])
     assert detect_confluence_in_window(fast, slow, volumes, lookback=2, multiplier=Decimal("2"), window=3) == "none"
+
+
+def test_rsi_over_a_window_equals_rsi_over_the_whole_series_at_the_same_point():
+    """RSI here is a pure sliding window — `rsi[i]` reads only the `period`
+    closes before `i`, with no term carried forward from earlier values.
+
+    The replay harness leans on exactly this: it computes the series once per
+    symbol instead of recomputing it for every 101-candle window, which is
+    ~78% of its runtime. EMA does NOT have this property (it is recursive from
+    a seed), so it stays windowed there. If RSI ever gains Wilder smoothing,
+    this test fails and that optimisation has to be reverted with it.
+    """
+    closes = [Decimal(str(p)) for p in [100, 102, 99, 105, 103, 98, 101, 107, 104, 99,
+                                        96, 102, 108, 105, 101, 97, 103, 109, 106, 100]]
+    whole = compute_rsi(closes, period=14)
+
+    for end in range(16, len(closes) + 1):
+        windowed = compute_rsi(closes[end - 16:end], period=14)
+        assert windowed[-1] == whole[end - 1], f"diverged at index {end - 1}"
