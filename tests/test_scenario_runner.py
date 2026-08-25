@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from src.btc_regime import REGIME_LOOKBACK
 from src.db.models import Kline, Scenario
 from src.scenario_runner import run_scenario_generation, process_symbol_scenario
 from src.scenario_signal import MIN_CANDLES
@@ -78,6 +79,18 @@ def _signal_klines(symbol, boundary):
         close=IN_PROGRESS_CLOSE, volume=Decimal("200"),
     )
     return rows, in_progress
+
+
+def _seed_btc_regime_klines(db_session, day_boundary, regime="up"):
+    for i in range(REGIME_LOOKBACK):
+        open_time = day_boundary - timedelta(days=REGIME_LOOKBACK - i)
+        price = Decimal(100 + i) if regime == "up" else Decimal(200 - i)
+        db_session.add(Kline(
+            symbol="BTCUSDT", timeframe="1d", open_time=open_time,
+            open=price, high=price, low=price, close=price, volume=Decimal("1000"),
+            flagged=False,
+        ))
+    db_session.commit()
 
 
 def _seed_signal_klines(
@@ -214,6 +227,7 @@ def test_run_scenario_generation_persists_scenarios_end_to_end(db_session, monke
 
     _seed_signal_klines(db_session, symbol="BTCUSDT")
     _insert_flat_klines(db_session, "ETHUSDT", MIN_CANDLES)
+    _seed_btc_regime_klines(db_session, day_boundary=datetime(2026, 8, 21), regime="up")
     monkeypatch.setattr(scenario_runner_module, "utc_now", lambda: NOW)
 
     result = run_scenario_generation(db_session, ["BTCUSDT", "ETHUSDT"])
@@ -231,7 +245,7 @@ def test_run_scenario_generation_isolates_symbol_failures(db_session, monkeypatc
 
     import src.scenario_runner as scenario_runner_module
 
-    def fake_process(session, symbol, timeframe="1h"):
+    def fake_process(session, symbol, regime, timeframe="1h", now=None):
         if symbol == "BTCUSDT":
             raise RuntimeError("boom")
         return "skipped"
@@ -253,7 +267,10 @@ def test_run_scenario_generation_counts_generated(db_session, monkeypatch):
 
     import src.scenario_runner as scenario_runner_module
 
-    monkeypatch.setattr(scenario_runner_module, "process_symbol_scenario", lambda session, symbol, timeframe="1h": "generated")
+    monkeypatch.setattr(
+        scenario_runner_module, "process_symbol_scenario",
+        lambda session, symbol, regime, timeframe="1h", now=None: "generated",
+    )
 
     result = run_scenario_generation(db_session, ["BTCUSDT"])
 
@@ -318,3 +335,35 @@ def test_process_symbol_scenario_accepts_short_signal_when_regime_is_down(db_ses
 
     assert process_symbol_scenario(db_session, "BTCUSDT", regime="down", now=NOW) == "generated"
     assert db_session.query(Scenario).count() == 1
+
+
+def test_run_scenario_generation_computes_regime_once_for_all_symbols(db_session, monkeypatch):
+    import src.scenario_runner as scenario_runner_module
+
+    _insert_flat_klines(db_session, "BTCUSDT", MIN_CANDLES)
+    _insert_flat_klines(db_session, "ETHUSDT", MIN_CANDLES)
+
+    call_count = {"n": 0}
+
+    def fake_compute_regime(session, now):
+        call_count["n"] += 1
+        return "up"
+
+    monkeypatch.setattr(scenario_runner_module, "compute_btc_regime", fake_compute_regime)
+    monkeypatch.setattr(scenario_runner_module, "utc_now", lambda: NOW)
+
+    run_scenario_generation(db_session, ["BTCUSDT", "ETHUSDT"])
+
+    assert call_count["n"] == 1
+
+
+def test_run_scenario_generation_applies_regime_to_every_symbol(db_session):
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+    _seed_signal_klines(db_session, symbol="ETHUSDT")
+    _seed_btc_regime_klines(db_session, day_boundary=datetime(2026, 8, 21), regime="down")
+
+    result = run_scenario_generation(db_session, ["BTCUSDT", "ETHUSDT"], now=NOW)
+
+    assert result.generated == 0
+    assert result.skipped == 2
+    assert db_session.query(Scenario).count() == 0

@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 
+from src.btc_regime import compute_btc_regime
 from src.db.models import Kline
 from src.integrity import TIMEFRAME_DELTAS, floor_to_timeframe
 from src.scenario_builder import build_scenario
@@ -125,7 +126,9 @@ def process_symbol_scenario(session, symbol: str, regime: str, timeframe: str = 
     return "generated"
 
 
-def run_scenario_generation(session, symbols: list) -> ScenarioRunResult:
+def run_scenario_generation(session, symbols: list, now: datetime = None) -> ScenarioRunResult:
+    now = now if now is not None else utc_now()
+    regime = compute_btc_regime(session, now)
     scanned = 0
     generated = 0
     skipped = 0
@@ -133,7 +136,7 @@ def run_scenario_generation(session, symbols: list) -> ScenarioRunResult:
     for symbol in symbols:
         scanned += 1
         try:
-            outcome = process_symbol_scenario(session, symbol)
+            outcome = process_symbol_scenario(session, symbol, regime, now=now)
         except Exception:
             session.rollback()
             logger.exception("Scenario generation failed for %s", symbol)
