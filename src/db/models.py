@@ -17,7 +17,13 @@ class Symbol(Base):
     # src/db/session.py) only ever ADDs nullable columns to a live database.
     # A NOT NULL column here would be skipped there, and every ORM query
     # against `symbols` would then fail on the deployed service.
-    has_futures_contract = Column(Boolean, nullable=True, default=False)
+    #
+    # No Python-side default either: a default would fire on every INSERT that
+    # leaves the value unset, making NULL unreachable through the ORM. NULL is
+    # a meaningful state here — "not yet classified by the daily symbol
+    # refresh" — and is exactly what ALTER TABLE ADD COLUMN leaves on every
+    # pre-existing row.
+    has_futures_contract = Column(Boolean, nullable=True)
     listed_at = Column(DateTime, nullable=True)
     # utc_now() returns a naive UTC datetime, matching this naive DateTime
     # column. A tz-aware value here would be converted using the server's

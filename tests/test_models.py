@@ -166,20 +166,29 @@ def test_paper_position_defaults_and_unique_scenario_constraint(db_session):
     db_session.rollback()
 
 
-def test_symbol_has_futures_contract_defaults_to_false_and_allows_null(db_session):
+def test_symbol_has_futures_contract_is_null_until_classified(db_session):
+    # A row the daily symbol refresh has not classified yet carries NULL,
+    # exactly like the pre-existing rows sync_missing_columns adds the column
+    # to on the live database.
     db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
     db_session.commit()
-    assert db_session.get(Symbol, "BTCUSDT").has_futures_contract is False
 
-    # Nullable is a hard requirement: sync_missing_columns only ever adds
-    # nullable columns to a live database, so a NOT NULL column here would
-    # break every query against `symbols` on the deployed service.
+    assert db_session.get(Symbol, "BTCUSDT").has_futures_contract is None
+
+
+def test_symbol_has_futures_contract_stores_both_booleans(db_session):
     db_session.add(Symbol(
-        symbol="NULLUSDT", base_asset="NULL", quote_asset="USDT",
-        is_active=True, has_futures_contract=None,
+        symbol="AAAUSDT", base_asset="AAA", quote_asset="USDT",
+        is_active=True, has_futures_contract=True,
+    ))
+    db_session.add(Symbol(
+        symbol="BBBUSDT", base_asset="BBB", quote_asset="USDT",
+        is_active=True, has_futures_contract=False,
     ))
     db_session.commit()
-    assert db_session.get(Symbol, "NULLUSDT").has_futures_contract is None
+
+    assert db_session.get(Symbol, "AAAUSDT").has_futures_contract is True
+    assert db_session.get(Symbol, "BBBUSDT").has_futures_contract is False
 
 
 def test_funding_rate_row_stores_one_row_per_symbol(db_session):
