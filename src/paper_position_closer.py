@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from src.db.models import Kline, PaperPosition, Scenario
 from src.paper_equity import current_equity
+from src.paper_trading_config import TAKER_FEE_RATE
 from src.timeutil import utc_now
 
 logger = logging.getLogger("paper_position_closer")
@@ -59,10 +60,17 @@ def _count_stuck_positions(session, now: datetime) -> int:
     )
 
 
+def _fees(position_size: Decimal, entry_price: Decimal, exit_price: Decimal) -> Decimal:
+    """Taker fees for both legs, each on the notional actually transacted."""
+    return position_size * (entry_price + exit_price) * TAKER_FEE_RATE
+
+
 def _realized_pnl(direction: str, position_size: Decimal, entry_price: Decimal, exit_price: Decimal) -> Decimal:
     if direction == "long":
-        return position_size * (exit_price - entry_price)
-    return position_size * (entry_price - exit_price)
+        gross = position_size * (exit_price - entry_price)
+    else:
+        gross = position_size * (entry_price - exit_price)
+    return gross - _fees(position_size, entry_price, exit_price)
 
 
 def close_resolved_positions(session, now: datetime = None) -> PositionCloseResult:

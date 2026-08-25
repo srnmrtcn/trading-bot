@@ -14,3 +14,9 @@ CONFIDENCE_THRESHOLD = Decimal("0.65")
 
 # Cap on simultaneously open paper positions.
 MAX_CONCURRENT_POSITIONS = 10
+
+# Binance USDT-M perpetual taker fee, charged on each leg's own notional.
+# Booked on every close: a paper portfolio that ignores costs reports an edge
+# that does not survive contact with the exchange — measured on 90 days of
+# replayed history, fees alone turned a +17.7R gross result into -14.5R net.
+TAKER_FEE_RATE = Decimal("0.0005")

@@ -10,9 +10,20 @@ from src.db.base import Base
 
 logger = logging.getLogger("db.session")
 
+# Recycled well inside the hour between scheduled jobs, so a connection is
+# never handed out after sitting idle long enough for the far end to have
+# quietly dropped it.
+POOL_RECYCLE_SECONDS = 1800
+
 
 def make_engine(database_url: str) -> Engine:
-    return create_engine(database_url, future=True)
+    # pre_ping verifies a pooled connection before handing it out; Railway's
+    # Postgres closes idle connections and the scheduler idles for most of
+    # every hour, so without it the first statement of a job fails.
+    return create_engine(
+        database_url, future=True,
+        pool_pre_ping=True, pool_recycle=POOL_RECYCLE_SECONDS,
+    )
 
 
 def make_session_factory(engine: Engine) -> sessionmaker:

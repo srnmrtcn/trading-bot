@@ -7,6 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.backfill import run_gap_backfill
+from src.btc_regime import BTC_SYMBOL, REGIME_TIMEFRAME
 from src.db.models import Symbol
 from src.fetch_log import record_run
 from src.integrity import floor_to_timeframe
@@ -21,6 +22,15 @@ from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
 logger = logging.getLogger("scheduler")
 
 GAP_LOOKBACK_DAYS = 30
+
+# How late a job may still start. APScheduler's default is one second, which
+# drops any run whose trigger fires while the process is busy or restarting.
+# Running late is harmless here: every fetch window is derived from stored
+# data rather than the clock, so a late run simply picks up where the last
+# one stopped. Half a period for the hourly job, a generous window for the
+# daily ones.
+HOURLY_MISFIRE_GRACE_SECONDS = 30 * 60
+DAILY_MISFIRE_GRACE_SECONDS = 2 * 60 * 60
 
 
 def get_resume_point(session, symbol: str, timeframe: str, now: datetime = None) -> datetime:
@@ -86,6 +96,32 @@ def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now
     return repaired
 
 
+def refresh_regime_source(session, binance_client, now: datetime) -> None:
+    """Bring BTC's daily candle up to date before the regime is read from it.
+
+    The daily job runs once at 00:10, so between then and the next day's run
+    the newest 1d row is the partially-formed stub that run stored — a candle
+    whose close is a price from ten minutes past midnight. The 00:05 hourly run
+    reads exactly that stub and derives the day's regime from it.
+
+    Reordering the cron triggers cannot fix this: the daily job walks every
+    active symbol and takes ~16 minutes, so it cannot be made to finish before
+    an hourly job that starts at :05. Refreshing the one symbol the regime
+    actually depends on costs a single request and removes the timing
+    dependency altogether.
+    """
+    start = get_resume_point(session, BTC_SYMBOL, REGIME_TIMEFRAME, now=now)
+    result = process_symbol_timeframe(
+        session, binance_client, BTC_SYMBOL, REGIME_TIMEFRAME,
+        start_ms=to_epoch_ms(start), end_ms=to_epoch_ms(now),
+    )
+    if result.error:
+        # Not fatal: compute_btc_regime has its own staleness guard and returns
+        # None rather than trusting old data, which blocks generation for the
+        # run instead of generating against a stale regime.
+        logger.error("BTC regime source refresh failed: %s", result.error)
+
+
 def run_timeframe_job(session_factory, binance_client, timeframe: str, now: datetime = None) -> None:
     session = session_factory()
     try:
@@ -138,6 +174,12 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
         learning_result = None
         paper_result = None
         if timeframe == "1h":
+            try:
+                refresh_regime_source(session, binance_client, end)
+            except Exception:
+                logger.exception("BTC regime source refresh failed for the %s job", timeframe)
+                session.rollback()
+
             try:
                 scenario_result = run_scenario_generation(session, symbols)
             except Exception:
@@ -204,15 +246,21 @@ def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:
         lambda: run_timeframe_job(session_factory, binance_client, "1h"),
         CronTrigger(minute=5),
         id="hourly_klines",
+        misfire_grace_time=HOURLY_MISFIRE_GRACE_SECONDS,
+        coalesce=True,
     )
     scheduler.add_job(
         lambda: run_timeframe_job(session_factory, binance_client, "1d"),
         CronTrigger(hour=0, minute=10),
         id="daily_klines",
+        misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
+        coalesce=True,
     )
     scheduler.add_job(
         lambda: run_symbol_refresh_job(session_factory, binance_client),
         CronTrigger(hour=0, minute=0),
         id="symbol_refresh",
+        misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
+        coalesce=True,
     )
     return scheduler

@@ -76,7 +76,8 @@ def test_run_paper_trading_cycle_closes_then_opens_using_freed_equity_in_one_cyc
     assert result.closed == 1
     assert result.opened == 1
     new_position = db_session.query(PaperPosition).filter(PaperPosition.symbol == "ETHUSDT").first()
-    expected_equity_after_close = STARTING_EQUITY + Decimal("100")  # 10 * (110 - 100)
+    # 10 * (110 - 100) gross, less 1.05 of taker fees on the two legs.
+    expected_equity_after_close = STARTING_EQUITY + Decimal("98.95")
     assert new_position.risk_amount == expected_equity_after_close * RISK_PCT
 
 

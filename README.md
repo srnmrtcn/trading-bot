@@ -82,6 +82,11 @@ en yakın kapanmış mumun kapanış fiyatından (henüz o mum yoksa pozisyon a�
 yok, her kapanan pozisyon satırı kendi `equity_before`/`equity_after` değerlerini taşır; pozisyon
 geçmişinin kendisi equity eğrisidir.
 
+Her kapanışta iki bacağın taker komisyonu (%0.05, `TAKER_FEE_RATE`) kendi işlem
+hacmi üzerinden düşülür — kazancı küçültür, zararı büyütür. Maliyetsiz bir paper
+portföy kimsenin işleyemeyeceği bir edge raporlar: 90 günlük replay'de komisyon
+tek başına +17.7R brüt sonucu -14.5R nete çevirdi.
+
 ## Dashboard
 
 Servis çalışırken `http://localhost:8000` (Railway'de kendi public domain'inde, `PORT` ortam
@@ -101,3 +106,24 @@ pytest -v
 
 Tüm birim testler `sqlite:///:memory:` üzerinde çalışır — gerçek bir
 PostgreSQL bağlantısı veya Binance API erişimi gerektirmez.
+
+## Strateji Araştırma Tezgahı
+
+Sinyal kurallarını canlıda saat saat beklemek yerine saklanan geçmiş üzerinde
+çevrimdışı ölçmek için:
+
+```bash
+PYTHONPATH=. python3 scripts/fetch_research_data.py   # 25 likit parite x 90 gun -> data/research.db
+PYTHONPATH=. python3 scripts/run_funnel.py            # her gate kac mumu eliyor
+PYTHONPATH=. python3 scripts/run_backtest.py          # kural basina win% / R / komisyon / net
+```
+
+Replay, production'ın kendi saf fonksiyonlarını (`evaluate_signal`,
+`build_scenario`, `evaluate_outcome`, `_window_rejection`) çağırır — yeniden
+yazılmış bir kopyayı değil — ve `has_pending_scenario` ile aynı "yön başına tek
+canlı senaryo" kilidini uygular. Süresi verinin bittiği yere taşan senaryolar
+zarar olarak yazılmaz, skorsuz bırakılır.
+
+Sonuçlar R cinsinden, yani işlemin kendi riskine bölünmüş olarak raporlanır.
+Dikkat: stop mesafesi sıfıra yaklaşınca hem R hem komisyon-R patlar, o
+işlemlerin ölçümü anlamsızdır — `min_stop_pct` filtresi bunun içindir.

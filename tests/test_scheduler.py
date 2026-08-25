@@ -24,7 +24,7 @@ class _FakeBinanceClient:
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.symbols_requested.append(symbol)
-        self.calls.append({"symbol": symbol, "start_ms": start_ms, "end_ms": end_ms})
+        self.calls.append({"symbol": symbol, "timeframe": timeframe, "start_ms": start_ms, "end_ms": end_ms})
         return []
 
 
@@ -35,9 +35,11 @@ class _PartiallyFailingBinanceClient:
 
     def __init__(self):
         self.symbols_requested = []
+        self.calls = []
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.symbols_requested.append(symbol)
+        self.calls.append({"symbol": symbol, "timeframe": timeframe})
         if symbol == "FAILSYMBOL":
             return [{
                 "open_time": datetime(2026, 1, 1, 0),
@@ -48,6 +50,15 @@ class _PartiallyFailingBinanceClient:
                 "volume": Decimal("1000"),
             }]
         return []
+
+
+def _requested(client, timeframe):
+    """Symbols the client was asked for on one timeframe.
+
+    The 1h job also refreshes BTC's own 1d candle before reading the regime
+    off it, so an unscoped assertion on every call now conflates the two.
+    """
+    return [call["symbol"] for call in client.calls if call["timeframe"] == timeframe]
 
 
 def _kline(symbol, timeframe, open_time, close="1"):
@@ -71,7 +82,7 @@ def test_run_timeframe_job_fetches_active_symbols_and_records_log(db_session):
 
     run_timeframe_job(session_factory=lambda: db_session, binance_client=fake_client, timeframe="1h")
 
-    assert fake_client.symbols_requested == ["BTCUSDT"]
+    assert _requested(fake_client, "1h") == ["BTCUSDT"]
     log_row = db_session.query(FetchLog).first()
     assert log_row.symbol == "BTCUSDT"
     assert log_row.status == "success"
@@ -93,7 +104,7 @@ def test_run_timeframe_job_isolates_symbol_failures_and_continues(db_session):
     # and would otherwise leave the session dirty for the next symbol.
     run_timeframe_job(session_factory=lambda: db_session, binance_client=fake_client, timeframe="1h")
 
-    assert set(fake_client.symbols_requested) == {"FAILSYMBOL", "OKSYMBOL"}
+    assert set(_requested(fake_client, "1h")) == {"FAILSYMBOL", "OKSYMBOL"}
     logs = {row.symbol: row.status for row in db_session.query(FetchLog).all()}
     assert logs.get("OKSYMBOL") == "success"
     assert logs.get("FAILSYMBOL") == "error"
@@ -175,7 +186,7 @@ def test_run_timeframe_job_skips_gap_repair_before_first_stored_candle(db_sessio
     )
 
     # Only the regular incremental fetch; no gap fetch for pre-listing history.
-    assert len(fake_client.calls) == 1
+    assert len([c for c in fake_client.calls if c["timeframe"] == "1h"]) == 1
 
 
 def test_run_timeframe_job_logs_run_summary(db_session, caplog):
@@ -311,7 +322,9 @@ def test_gaps_filled_counts_stored_rows_not_fetch_attempts(db_session, caplog):
         "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, "
         "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ] * 3
-    assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 0
+    assert db_session.query(Kline).filter(
+        Kline.timeframe == "1h", Kline.open_time == missing,
+    ).count() == 0
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
 
 
@@ -329,7 +342,9 @@ def test_gaps_filled_counts_a_real_repair(db_session, caplog):
         "1h job finished: 1 symbols succeeded, 0 failed, 1 gaps filled, 0 scenarios generated, "
         "0 resolved, 0 calibrated, 0 positions closed, 0 opened"
     ]
-    assert db_session.query(Kline).filter(Kline.open_time == missing).count() == 1
+    assert db_session.query(Kline).filter(
+        Kline.timeframe == "1h", Kline.open_time == missing,
+    ).count() == 1
 
 
 def test_run_summary_counts_each_symbol_exactly_once(db_session, caplog, monkeypatch):
@@ -513,3 +528,58 @@ def test_run_timeframe_job_survives_a_paper_trading_cycle_failure(db_session, ca
     assert _summary_lines(caplog) == [
         "1h job finished: 1 symbols succeeded, 0 failed, 0 gaps filled, 0 scenarios generated, 0 resolved, 0 calibrated"
     ]
+
+
+def test_hourly_job_refreshes_btc_daily_candle_before_generating_scenarios(db_session, monkeypatch):
+    """The BTC regime reads the newest *closed* 1d candle, but the daily job
+    only runs at 00:10 — so at 00:05 the candle for the day that just ended is
+    still the 10-minute stub yesterday's run stored, and its "close" is a
+    price from 00:10 yesterday. One run a day computes the regime from it.
+
+    Refreshing BTC's own daily candle here removes the dependency on when the
+    daily job happens to run, which reordering the crons cannot do: that job
+    takes ~16 minutes and would not finish before the hourly one starts.
+    """
+    db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
+    for i in range(100):
+        db_session.add(_kline("BTCUSDT", "1h", datetime(2026, 1, 1) + timedelta(hours=i)))
+    db_session.commit()
+
+    client = _FakeBinanceClient()
+    order = []
+
+    def fake_run_scenario_generation(session, symbols):
+        from src.scenario_runner import ScenarioRunResult
+        order.append("scenarios")
+        return ScenarioRunResult(scanned=0, generated=0, skipped=0, failed=0)
+
+    original_get_klines = client.get_klines
+
+    def tracking_get_klines(symbol, timeframe, start_ms, end_ms):
+        if timeframe == "1d":
+            order.append("btc_1d")
+        return original_get_klines(symbol, timeframe, start_ms, end_ms)
+
+    client.get_klines = tracking_get_klines
+    monkeypatch.setattr(scheduler_module, "run_scenario_generation", fake_run_scenario_generation)
+
+    run_timeframe_job(session_factory=lambda: db_session, binance_client=client, timeframe="1h")
+
+    assert order == ["btc_1d", "scenarios"]
+
+
+def test_every_job_tolerates_a_late_start_and_coalesces_a_backlog():
+    """APScheduler defaults `misfire_grace_time` to one second, so a job whose
+    trigger fires while the process is busy or mid-restart is dropped outright
+    — a Railway redeploy that straddles :05 silently costs an hour of fetching
+    and a scenario-generation pass.
+
+    Every job here is safe to run late: the fetch window is derived from stored
+    data, not from the clock. `coalesce` collapses a backlog into a single run
+    so a long outage does not fire one job per missed hour on recovery.
+    """
+    scheduler = build_scheduler(session_factory=lambda: None, binance_client=None)
+
+    for job in scheduler.get_jobs():
+        assert job.misfire_grace_time >= 600, job.id
+        assert job.coalesce is True, job.id

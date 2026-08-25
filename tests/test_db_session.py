@@ -105,3 +105,17 @@ def test_create_all_tables_upgrades_a_database_that_predates_the_new_columns():
         assert reloaded.calibrated_confidence == Decimal("0.65")
     finally:
         session.close()
+
+
+def test_engine_pre_pings_and_recycles_pooled_connections():
+    """Railway's Postgres drops idle connections, and the scheduler leaves one
+    idle for ~55 minutes between hourly jobs. Without pre-ping the next job
+    checks out a dead socket and dies on `server closed the connection
+    unexpectedly`; recycling caps how long a connection can go stale.
+    """
+    from src.db.session import POOL_RECYCLE_SECONDS, make_engine
+
+    engine = make_engine("postgresql+psycopg2://user:pw@example.invalid/db")
+
+    assert engine.pool._pre_ping is True
+    assert engine.pool._recycle == POOL_RECYCLE_SECONDS
