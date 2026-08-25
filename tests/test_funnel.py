@@ -141,7 +141,9 @@ def test_a_long_draft_that_reaches_its_target_scores_its_reward_to_risk_in_r():
     draft = _draft("long", 100, 110, 95)
     future = _series([102, 111] + [111] * 22, start=datetime(2026, 1, 1, 1))
 
-    assert resolve_draft(draft, future) == ("hit_target", Decimal("2"))
+    outcome = resolve_draft(draft, future)
+    assert (outcome.status, outcome.r_multiple) == ("hit_target", Decimal("2"))
+    assert outcome.exit_price == Decimal("110")
 
 
 def test_a_long_draft_that_reaches_its_stop_scores_exactly_minus_one_r():
@@ -150,7 +152,9 @@ def test_a_long_draft_that_reaches_its_stop_scores_exactly_minus_one_r():
     draft = _draft("long", 100, 110, 95)
     future = _series([98, 94] + [94] * 22, start=datetime(2026, 1, 1, 1))
 
-    assert resolve_draft(draft, future) == ("hit_stop", Decimal("-1"))
+    outcome = resolve_draft(draft, future)
+    assert (outcome.status, outcome.r_multiple) == ("hit_stop", Decimal("-1"))
+    assert outcome.exit_price == Decimal("95")
 
 
 def test_an_expired_draft_scores_the_unrealised_move_at_the_last_candle():
@@ -159,7 +163,9 @@ def test_an_expired_draft_scores_the_unrealised_move_at_the_last_candle():
     draft = _draft("long", 100, 110, 95)
     future = _series([103] * 24, start=datetime(2026, 1, 1, 1))
 
-    assert resolve_draft(draft, future) == ("expired", Decimal("0.6"))
+    outcome = resolve_draft(draft, future)
+    assert (outcome.status, outcome.r_multiple) == ("expired", Decimal("0.6"))
+    assert outcome.exit_price == Decimal("103")
 
 
 def test_a_draft_whose_future_data_stops_before_expiry_is_left_unscored():
@@ -188,13 +194,19 @@ def test_backtest_selects_signals_according_to_the_named_rule():
     assert backtest_symbol("TESTUSDT", klines, "shipped").signals == 0
 
 
-def test_fee_cost_in_r_scales_inversely_with_stop_distance():
-    """A round trip costs a fixed fraction of notional, so the tighter the
-    stop the more of the trade's own risk unit the fees eat. Entry 100 with a
-    5-wide stop and 0.1% round-trip: 0.1 of 5 = 0.02R. Shrink the stop to
-    0.5 and the identical fee becomes 0.2R — ten times the drag."""
-    assert fee_cost_in_r(Decimal("100"), Decimal("5"), Decimal("0.001")) == Decimal("0.02")
-    assert fee_cost_in_r(Decimal("100"), Decimal("0.5"), Decimal("0.001")) == Decimal("0.2")
+def test_fee_cost_in_r_charges_each_leg_on_its_own_notional():
+    """Mirrors `paper_position_closer._fees`: each leg is charged on the
+    notional actually transacted, not both on the entry price. Entry 100, exit
+    110, 0.05% a side: 0.105 against a 5-wide risk is 0.021R.
+
+    The tighter the stop the more of the trade's own risk unit the fees eat —
+    shrink the risk to 0.5 and the identical fee becomes 0.21R.
+    """
+    entry, exit_price = Decimal("100"), Decimal("110")
+    rate = Decimal("0.0005")
+
+    assert fee_cost_in_r(entry, exit_price, Decimal("5"), rate) == Decimal("0.021")
+    assert fee_cost_in_r(entry, exit_price, Decimal("0.5"), rate) == Decimal("0.21")
 
 
 def test_a_draft_with_no_candle_before_expiry_is_left_unscored():
@@ -253,3 +265,32 @@ def test_risk_filters_reject_degenerate_stops_and_upside_down_reward():
     assert passes_risk_filters(degenerate, Decimal("0.005"), Decimal("1.5")) is False
     assert passes_risk_filters(upside_down, Decimal("0.005"), Decimal("1.5")) is False
     assert passes_risk_filters(degenerate, None, None) is True, "filters are opt-in"
+
+
+def test_the_funnel_table_applies_the_same_window_gate_as_production():
+    """`analyze_symbol` feeds the funnel report, which is read side by side
+    with the backtest. If one honours `_window_rejection` and the other does
+    not, the two tables describe different strategies and the comparison
+    between them is meaningless."""
+    closes = [100] * 80 + list(range(99, 79, -1)) + [86]
+    klines = _series(closes)
+    assert analyze_symbol(klines).rsi_cross_up == 1
+
+    klines[-5]["flagged"] = True
+    assert analyze_symbol(klines).rsi_cross_up == 0
+
+
+def test_the_backtest_honours_the_btc_regime_gate():
+    """`process_symbol_scenario` drops a long unless BTC's daily regime is
+    "up", and drops everything when the regime cannot be determined. A replay
+    without that gate measures a rule the service never runs — roughly twice
+    the trades, drawn from exactly the conditions the gate exists to avoid.
+    """
+    closes = [round(100 + i * 0.5, 2) for i in range(80)]
+    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
+    closes += [round(closes[-1] + 1, 2)]
+    klines = _series(closes)
+
+    assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: "up").signals == 1
+    assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: "down").signals == 0
+    assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: None).signals == 0

@@ -61,3 +61,25 @@ def test_current_equity_ignores_open_positions(db_session):
     db_session.commit()
 
     assert current_equity(db_session) == STARTING_EQUITY
+
+
+def test_current_equity_ignores_a_closed_position_that_recorded_no_equity(db_session):
+    """`equity_after` is nullable and only written when the closer runs. A row
+    marked closed without it carries no equity information, so equity must fall
+    back to the last row that does — returning None instead poisons
+    `size_position` and every caller downstream of it.
+    """
+    good, blank = _scenario("AUSDT"), _scenario("BUSDT")
+    db_session.add_all([good, blank])
+    db_session.commit()
+    db_session.add(_closed_position(good, Decimal("10500"), datetime(2026, 1, 1)))
+    db_session.add(PaperPosition(
+        scenario_id=blank.id, symbol="BUSDT", direction="long",
+        entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
+        risk_amount=Decimal("100"), position_size=Decimal("10"),
+        opened_at=datetime(2026, 1, 1), status="closed",
+        closed_at=datetime(2026, 1, 2), equity_after=None,
+    ))
+    db_session.commit()
+
+    assert current_equity(db_session) == Decimal("10500")

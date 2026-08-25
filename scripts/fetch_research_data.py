@@ -23,6 +23,13 @@ from src.timeutil import to_epoch_ms, utc_now
 RESEARCH_DB_URL = "sqlite:///data/research.db"
 TIMEFRAME = "1h"
 DAYS = 90
+
+# The BTC regime reads 22 daily candles, and the earliest evaluable 1h
+# window sits ~4 days into the sample, so the daily series has to start
+# well before the hourly one.
+REGIME_SYMBOL = "BTCUSDT"
+REGIME_TIMEFRAME = "1d"
+REGIME_DAYS = 200
 SYMBOLS = [
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
@@ -59,6 +66,15 @@ def main() -> int:
                     "%-10s %5d candles (%d new, %d flagged)",
                     symbol, result.fetched, result.inserted, result.flagged,
                 )
+        regime = process_symbol_timeframe(
+            session, client, REGIME_SYMBOL, REGIME_TIMEFRAME,
+            start_ms=to_epoch_ms(end - timedelta(days=REGIME_DAYS)), end_ms=to_epoch_ms(end),
+        )
+        if regime.error:
+            logging.warning("%-10s %s FAILED: %s", REGIME_SYMBOL, REGIME_TIMEFRAME, regime.error)
+            failed.append(REGIME_SYMBOL + REGIME_TIMEFRAME)
+        else:
+            logging.info("%-10s %5d daily candles (regime source)", REGIME_SYMBOL, regime.fetched)
     finally:
         session.close()
 

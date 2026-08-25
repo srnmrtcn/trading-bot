@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from src.integrity import TIMEFRAME_DELTAS
 from src.outcome_evaluator import evaluate_outcome
+from src.paper_trading_config import TAKER_FEE_RATE
 from src.indicators import compute_ema, compute_rsi, detect_confluence_in_window
 from src.scenario_runner import SCENARIO_LOOKBACK, _window_rejection
 from src.scenario_builder import build_scenario
@@ -57,8 +58,13 @@ def _crossed_up_recently(rsi: list, window: int) -> bool:
 
 def analyze_symbol(klines: list) -> FunnelCounts:
     counts = FunnelCounts()
+    step = TIMEFRAME_DELTAS["1h"]
     for end in range(MIN_CANDLES, len(klines) + 1):
         window = klines[max(0, end - SCENARIO_LOOKBACK):end]
+        # The same gate production applies before reading any indicator, so
+        # this table and the backtest describe one strategy, not two.
+        if _window_rejection(window, "1h", window[-1]["open_time"] + step) is not None:
+            continue
         counts.evaluated += 1
 
         closes = [row["close"] for row in window]
@@ -117,9 +123,10 @@ def resolve_draft(draft, future_klines: list):
     )
     status, _resolved_at = outcome
     if status == "hit_stop":
-        return status, Decimal("-1")
+        return DraftOutcome(status, Decimal("-1"), draft.stop_price)
     if status == "hit_target":
-        return status, abs(draft.target_price - draft.entry_price) / risk
+        reward = abs(draft.target_price - draft.entry_price)
+        return DraftOutcome(status, reward / risk, draft.target_price)
 
     # Expired: worth its unrealised move at the last candle that closed
     # before expiry, mirroring paper_position_closer's exit rule.
@@ -133,23 +140,34 @@ def resolve_draft(draft, future_klines: list):
         exit_price - draft.entry_price if draft.direction == "long"
         else draft.entry_price - exit_price
     )
-    return status, move / risk
+    return DraftOutcome(status, move / risk, exit_price)
 
 
-# Binance USDT-M perpetual taker fee, both legs. Paper trading books none
-# of this today, which is why every measured edge here is reported twice.
-FEE_ROUND_TRIP = Decimal("0.001")
+def fee_cost_in_r(entry_price: Decimal, exit_price: Decimal, risk: Decimal,
+                  fee_rate: Decimal) -> Decimal:
+    """What a round trip costs in units of the trade's own risk.
+
+    Charges each leg on the notional actually transacted, the same way
+    `paper_position_closer._fees` does, and takes the rate from the shipped
+    config rather than restating it — a replay that models costs differently
+    from the portfolio it is meant to inform is worse than one that models
+    none at all.
+    """
+    return (entry_price + exit_price) * fee_rate / risk
 
 
-def fee_cost_in_r(entry_price: Decimal, risk: Decimal, fee_rate: Decimal) -> Decimal:
-    """What a round trip costs in units of the trade's own risk."""
-    return entry_price * fee_rate / risk
+@dataclass
+class DraftOutcome:
+    status: str
+    r_multiple: Decimal
+    exit_price: Decimal
 
 
 @dataclass
 class RuleResult:
     signals: int = 0
     no_levels: int = 0
+    regime_blocked: int = 0
     filtered: int = 0
     unscored: int = 0
     hit_target: int = 0
@@ -215,6 +233,14 @@ def passes_risk_filters(draft, min_stop_pct, min_rr) -> bool:
     return True
 
 
+def _regime_allows(regime, direction: str) -> bool:
+    """Mirrors `process_symbol_scenario`: an undetermined regime blocks every
+    direction, not just the one it disagrees with."""
+    if regime is None:
+        return False
+    return regime == ("up" if direction == "long" else "down")
+
+
 def is_locked(live_until: dict, direction: str, now) -> bool:
     """Is a scenario in this direction still live at `now`?"""
     expiry = live_until.get(direction)
@@ -222,7 +248,13 @@ def is_locked(live_until: dict, direction: str, now) -> bool:
 
 
 def backtest_symbol(symbol: str, klines: list, rule: str,
-                    min_stop_pct=None, min_rr=None) -> RuleResult:
+                    min_stop_pct=None, min_rr=None, regime_at=None) -> RuleResult:
+    """Replay one rule over one symbol.
+
+    `regime_at(now)` supplies BTC's daily regime the way
+    `run_scenario_generation` computes it once per run; leave it None to
+    measure a rule with the regime gate lifted.
+    """
     step = TIMEFRAME_DELTAS["1h"]
     result = RuleResult()
     # Mirrors `has_pending_scenario`: one live scenario per direction at a
@@ -247,6 +279,9 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
         signal = _rule_signal(rule, window)
         if signal is None:
             continue
+        if regime_at is not None and not _regime_allows(regime_at(now), signal.direction):
+            result.regime_blocked += 1
+            continue
         if is_locked(live_until, signal.direction, now):
             continue
         result.signals += 1
@@ -263,10 +298,10 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
         if scored is None:
             result.unscored += 1
             continue
-        status, r_multiple = scored
-        setattr(result, status, getattr(result, status) + 1)
-        result.total_r += r_multiple
+        setattr(result, scored.status, getattr(result, scored.status) + 1)
+        result.total_r += scored.r_multiple
         result.total_fee_r += fee_cost_in_r(
-            draft.entry_price, abs(draft.entry_price - draft.stop_price), FEE_ROUND_TRIP,
+            draft.entry_price, scored.exit_price,
+            abs(draft.entry_price - draft.stop_price), TAKER_FEE_RATE,
         )
     return result

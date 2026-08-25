@@ -17,7 +17,13 @@ def current_equity(session) -> Decimal:
     """
     last_closed = (
         session.query(PaperPosition)
-        .filter(PaperPosition.status == "closed")
+        .filter(
+            PaperPosition.status == "closed",
+            # A closed row without an `equity_after` carries no equity
+            # information; skipping it falls back to the last row that does
+            # rather than returning None into every caller's arithmetic.
+            PaperPosition.equity_after.isnot(None),
+        )
         .order_by(PaperPosition.closed_at.desc(), PaperPosition.id.desc())
         .first()
     )

@@ -20,3 +20,12 @@ MAX_CONCURRENT_POSITIONS = 10
 # that does not survive contact with the exchange — measured on 90 days of
 # replayed history, fees alone turned a +17.7R gross result into -14.5R net.
 TAKER_FEE_RATE = Decimal("0.0005")
+
+# Hard ceiling on a position's notional, as a multiple of current equity.
+#
+# Not a strategy parameter — a guardrail. Fixed-fractional sizing divides by
+# the stop distance, and `build_scenario` puts no floor under that distance,
+# so a stop that lands a rounding error away from entry asks for arbitrarily
+# large notional. Measured on replayed history, the tightest stops came in at
+# 0.003% of entry: 300x notional, where fees alone dwarf the intended risk.
+MAX_LEVERAGE = Decimal("3")

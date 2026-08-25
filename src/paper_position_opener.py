@@ -38,6 +38,14 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
     )
     candidates = [scenario for scenario in candidates if scenario.id not in positioned_scenario_ids]
 
+    equity = current_equity(session)
+    if equity <= 0:
+        # The portfolio is gone. Reported once, here, rather than as one
+        # sizing failure per pending scenario — which would bury the cause
+        # under a stack trace for every candidate and inflate `failed`.
+        logger.error("Paper portfolio equity is %s — not opening any positions", equity)
+        return PositionOpenResult(scanned=0, opened=0, skipped=0, failed=0)
+
     open_symbols = {
         row[0] for row in session.query(PaperPosition.symbol).filter(PaperPosition.status == "open").all()
     }
@@ -61,8 +69,12 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
                 skipped += 1
                 continue
 
-            equity = current_equity(session)
-            risk_amount, position_size = size_position(equity, scenario.entry_price, scenario.stop_price, RISK_PCT)
+            # Re-read per candidate: a position opened earlier in this loop
+            # does not change equity, but staying with the live value keeps
+            # sizing correct if that ever changes.
+            risk_amount, position_size = size_position(
+                current_equity(session), scenario.entry_price, scenario.stop_price, RISK_PCT,
+            )
 
             session.add(PaperPosition(
                 scenario_id=scenario.id, symbol=symbol, direction=scenario.direction,

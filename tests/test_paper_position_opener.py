@@ -142,3 +142,40 @@ def test_isolates_a_failing_position_open(db_session, monkeypatch):
     assert result.opened == 1
     assert result.failed == 1
     assert db_session.query(PaperPosition).filter(PaperPosition.status == "open").count() == 1
+
+
+def test_a_wiped_out_portfolio_stops_opening_instead_of_failing_per_candidate(db_session, caplog):
+    """Equity at or below zero is the end of the portfolio, not a per-scenario
+    error. Left to the loop, `size_position` would raise for every candidate in
+    turn — one stack trace each, `failed` climbing with the number of pending
+    scenarios, and the actual cause buried."""
+    import logging
+
+    dead = Scenario(
+        symbol="OLDUSDT", direction="long", entry_price=Decimal("100"),
+        target_price=Decimal("110"), stop_price=Decimal("90"),
+        expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
+        created_at=datetime(2025, 1, 1), expires_at=datetime(2025, 1, 2),
+        status="hit_stop", calibrated_confidence=Decimal("0.7"),
+    )
+    db_session.add(dead)
+    db_session.commit()
+    db_session.add(PaperPosition(
+        scenario_id=dead.id, symbol="OLDUSDT", direction="long",
+        entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
+        risk_amount=Decimal("100"), position_size=Decimal("10"),
+        opened_at=datetime(2025, 1, 1), status="closed",
+        closed_at=datetime(2025, 1, 2), exit_price=Decimal("90"),
+        realized_pnl=Decimal("-10000"), equity_before=STARTING_EQUITY, equity_after=Decimal("0"),
+    ))
+    for symbol in ("AUSDT", "BUSDT", "CUSDT"):
+        db_session.add(_pending_scenario(symbol=symbol))
+    db_session.commit()
+
+    with caplog.at_level(logging.ERROR):
+        result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
+
+    assert result.opened == 0
+    assert result.failed == 0, "a dead portfolio is not three separate failures"
+    assert db_session.query(PaperPosition).filter(PaperPosition.status == "open").count() == 0
+    assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 1
