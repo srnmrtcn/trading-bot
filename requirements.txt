@@ -1,6 +1,7 @@
 sqlalchemy>=2.0,<2.1
 psycopg2-binary>=2.9,<3.0
 python-binance>=1.0.19,<2.0
+requests>=2.31,<3.0
 apscheduler>=3.10,<4.0
 pytest>=7.4,<8.0
 flask>=3.0,<4.0
