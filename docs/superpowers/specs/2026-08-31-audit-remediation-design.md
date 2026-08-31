@@ -14,14 +14,16 @@ Faz 2  prod sağlamlık        → insansız aylarca çalışsın, repodan kurul
 Faz 3  canlı katman          → ayrı spec; Faz 1 kapısı geçilmeden başlamaz
 ```
 
-Kullanıcı kararları: uygulamayı yerel worker yapar (aşağıda "Çalışma modeli"); RSI Wilder'a geçer; kalibre olmamış kovadan paper pozisyon açılmaz; Faz 1 paper ve replay düzeltmelerini tek fazda birleştirir.
+Kullanıcı kararları: uygulamayı `coder-worker` yapar (`motor: "ollama"`; aşağıda "Çalışma modeli"); RSI Wilder'a geçer; kalibre olmamış kovadan paper pozisyon açılmaz; Faz 1 paper ve replay düzeltmelerini tek fazda birleştirir.
 
-## Çalışma modeli (yerel worker)
+## Çalışma modeli (`coder-worker` / `motor: "ollama"`)
 
-`QWEN.md` kuralları bağlayıcıdır: worker `tests/` yazamaz, git çalıştıramaz, bağımlılık ekleyemez, görevde adı geçmeyen dosyaya dokunamaz ve ~250 satır üstü dosyada tam-dosya yazımı güvenilir değildir. Bu yüzden her görev iki yarımdır:
+Bu spec kapsamındaki bütün dolgu işleri `coder-worker` ile çalışır ve iş JSON'unda `motor: "ollama"` açıkça yazılır. `coder-ajan`, `motor: "qwen"`, `motor: "uret"` ve `gorev_uret.py` bu audit remediation akışında kullanılmaz. `gorev_uret.py` genel ajan altyapısında deneysel kalabilir; bu spec ona bağımlı değildir.
 
-1. **Hazırlık (Claude):** kırmızı testler, gerekiyorsa stub imza + adım adım docstring, görev tanımındaki dosya listesi ve `verify` komutu.
-2. **Dolgu (worker):** listelenen dosyaları yazar, `verify`'ı geçirir, `gozden-gecirici` inceler.
+`coder-worker` tek-atış orchestrator üzerinden çalışır ve `QWEN.md` dosyasını otomatik yüklemez. Bu nedenle bağlayıcı kurallar her görevin `goal`, `files`, `context` ve `verify` alanlarına açıkça yazılır: worker `tests/` yazamaz, git çalıştıramaz, bağımlılık ekleyemez, görevde adı geçmeyen dosyaya dokunamaz ve ~250 satır üstü dosyada tam-dosya yazımı güvenilir değildir. Bu yüzden her görev iki yarımdır:
+
+1. **Hazırlık (yönetici/Codex):** kırmızı testler, gerekiyorsa stub imza + adım adım docstring, görev tanımındaki dosya listesi ve `verify` komutu. Testler hedef kaynak dosya yazılmadan önce kırmızı doğrulanır; referans implementasyonla kapının geçilebilirliği kanıtlanır ve kaynak yeniden stub'a döndürülür.
+2. **Dolgu (`coder-worker`):** yalnızca `files` alanında listelenen kaynak dosyaları yazar ve `verify` komutunu geçirir. Ardından yönetici diff'i inceler, tam test paketini çalıştırır ve commit eder.
 
 Üç dosya worker sınırının üstünde ve Faz 0/1'de değişecek; **davranış değiştirmeden** önce bölünür (Claude, mevcut testler dokunulmadan yeşil kalır):
 
@@ -33,7 +35,7 @@ Kullanıcı kararları: uygulamayı yerel worker yapar (aşağıda "Çalışma m
 
 Eski modül adları import uyumluluğu için yeniden dışa aktarılır (`from src.outcome_resolver import resolve_pending_scenarios` gibi tek satır); testler değişmez.
 
-Worker'ın "imza ve sabit değiştirme" kuralı görev bazında açıkça aşılır: görev tanımı hangi sabitin/imzanın değiştiğini yazar, testler yeni değere göre yazılmıştır.
+`coder-worker`ın "imza ve sabit değiştirme" kuralı görev bazında açıkça aşılır: görev tanımı hangi sabitin/imzanın değiştiğini yazar, testler yeni değere göre yazılmıştır.
 
 ---
 
