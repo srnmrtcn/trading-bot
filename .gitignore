@@ -16,3 +16,4 @@ data/
 .qwen/*
 !.qwen/settings.json
 !.qwen/agents/
+DURUM.md
