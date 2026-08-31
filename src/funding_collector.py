@@ -78,18 +78,58 @@ def record_funding_event(session, symbol: str, funding_time: datetime, funding_r
     """
     Ayni (symbol, funding_time) icin FundingRateHistory satiri zaten varsa hicbir sey yapmaz ve False doner. Yoksa satiri session'a EKLER ve True doner. COMMIT ETMEZ - cagiran topluca commit eder.
     """
-    raise NotImplementedError
+    existing = session.query(FundingRateHistory).filter_by(symbol=symbol, funding_time=funding_time).first()
+    if existing is not None:
+        return False
+    
+    session.add(FundingRateHistory(
+        symbol=symbol,
+        funding_time=funding_time,
+        funding_rate=funding_rate,
+        mark_price=mark_price
+    ))
+    return True
 
 
 def funding_events_between(session, symbol: str, start: datetime, end: datetime) -> list:
     """
     Verilen sembol icin start < funding_time <= end araligindaki FundingRateHistory satirlarini funding_time'a gore ARTAN sirada dondurur; her eleman (funding_time, funding_rate, mark_price) uclusu. Sinirlar bilincli asimetrik: acilis anindaki olay o pozisyonun degil, kapanis anindaki olay onundur. Kayit yoksa bos liste. Baska sembolun satirlari sayilmaz. Yalnizca okur.
     """
-    raise NotImplementedError
+    events = session.query(FundingRateHistory).filter(
+        FundingRateHistory.symbol == symbol,
+        FundingRateHistory.funding_time > start,
+        FundingRateHistory.funding_time <= end
+    ).order_by(FundingRateHistory.funding_time.asc()).all()
+    
+    return [(event.funding_time, event.funding_rate, event.mark_price) for event in events]
 
 
 def refresh_funding_history(session, binance_client, now: datetime = None) -> int:
     """
     now verilmezse utc_now(). binance_client.get_funding_events() cagrilir; donen sozluk {symbol: (funding_time, funding_rate, mark_price)}. Symbol tablosunda has_futures_contract == True olan her sembol icin feed'deki kayit record_funding_event ile yazilir. Feed'de olmayan sembol atlanir. funding_time ya da mark_price None olan kayit atlanir. Sonda session.commit(); YENI yazilan satir sayisi doner. Hatalar YUKARI YAYILIR - cagiran saatlik job kendi try/except'i ile izole eder.
     """
-    raise NotImplementedError
+    if now is None:
+        now = utc_now()
+
+    events = binance_client.get_funding_events()
+    
+    new_count = 0
+    
+    symbols = session.query(Symbol).filter(Symbol.has_futures_contract == True).all()
+    
+    for symbol in symbols:
+        event_data = events.get(symbol.symbol)
+        if event_data is None:
+            continue
+            
+        funding_time, funding_rate, mark_price = event_data
+        
+        # None kontrolü
+        if funding_time is None or funding_rate is None or mark_price is None:
+            continue
+            
+        if record_funding_event(session, symbol.symbol, funding_time, funding_rate, mark_price):
+            new_count += 1
+    
+    session.commit()
+    return new_count
