@@ -42,6 +42,18 @@ def _series(closes: list, volumes: list = None, start: datetime = None) -> list:
     return rows
 
 
+def _wilder_trend_cross_closes() -> list:
+    """A series that creates a strong +10 rally EMA trend, then 350 units
+    of loss to pull Wilder RSI below 30, then an +80 bounce that pushes RSI
+    above 30 while EMA9 remains above EMA21.
+    """
+    # 99 candles of +10 rally
+    closes = [100 + i * 10 for i in range(99)]
+    # 350 units of loss to pull RSI below 30
+    closes += [730, 810]
+    return closes
+
+
 def test_replay_reexports_the_production_minimum_stop_threshold():
     assert REPLAY_MIN_STOP_PCT is PRODUCTION_MIN_STOP_PCT
 
@@ -103,10 +115,10 @@ def test_counts_a_trend_aligned_long_when_rsi_crosses_up_inside_an_uptrend():
 
     A steep 80-candle rally opens a wide EMA9/EMA21 gap, then 20 micro-drops
     floor RSI at 0 without closing that gap, then a bounce candle.
+    
+    Updated to use _wilder_trend_cross_closes helper for consistent setup.
     """
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     counts = analyze_symbol(_series(closes))
 
     assert counts.rsi_cross_up == 1
@@ -194,9 +206,7 @@ def test_backtest_selects_signals_according_to_the_named_rule():
     """The same candles produce a signal under rule B and none under the
     shipped rule — the driver must dispatch on the rule, not on one fixed
     definition of 'signal'."""
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     klines = _series(closes)
 
     assert backtest_symbol("TESTUSDT", klines, "trend").signals == 1
@@ -248,9 +258,7 @@ def test_a_flagged_candle_in_the_window_suppresses_the_signal():
     (`scenario_runner._window_rejection`). A replay that ignores that measures
     a strategy nobody is running — and flagged candles are exactly the shape
     that manufactures a spurious cross."""
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     klines = _series(closes)
     assert backtest_symbol("TESTUSDT", klines, "trend").signals == 1
 
@@ -295,9 +303,7 @@ def test_the_backtest_honours_the_btc_regime_gate():
     without that gate measures a rule the service never runs — roughly twice
     the trades, drawn from exactly the conditions the gate exists to avoid.
     """
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     klines = _series(closes)
 
     assert backtest_symbol("TESTUSDT", klines, "trend", regime_at=lambda now: "up").signals == 1
@@ -314,9 +320,7 @@ def test_the_backtest_can_score_only_signals_after_a_cutoff():
     the full series available as context and only scores what happens after
     the boundary.
     """
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     klines = _series(closes)
     signal_time = klines[-1]["open_time"] + timedelta(hours=1)
 
@@ -336,9 +340,7 @@ def test_iter_scenarios_reports_why_a_signal_produced_no_draft():
     Rejections are yielded rather than swallowed so callers can tally where
     signals die without re-deriving the reason.
     """
-    closes = [round(100 + i * 0.5, 2) for i in range(80)]
-    closes += [round(closes[-1] - 0.01 * i, 2) for i in range(1, 21)]
-    closes += [round(closes[-1] + 1, 2)]
+    closes = _wilder_trend_cross_closes()
     klines = _series(closes)
 
     kinds = [e.kind for e in iter_scenarios("TESTUSDT", klines, "trend")]
