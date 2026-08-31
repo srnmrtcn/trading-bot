@@ -158,3 +158,42 @@ class BinanceClient:
             if len(raw) < 1000:
                 break
         return all_rows
+
+    def get_futures_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list:
+        all_rows = []
+        seen_open_times = set()
+        cursor = start_ms
+        while cursor < end_ms:
+            raw = self._backoff.call(
+                self._client.futures_klines,
+                symbol=symbol,
+                interval=interval,
+                startTime=cursor,
+                endTime=end_ms,
+                limit=1000,
+            )
+            if not raw:
+                break
+            for entry in raw:
+                open_time = entry[0]
+                if open_time in seen_open_times:
+                    continue
+                seen_open_times.add(open_time)
+                open_time_dt = datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).replace(tzinfo=None)
+                all_rows.append({
+                    "open_time": open_time_dt,
+                    "open": Decimal(str(entry[1])),
+                    "high": Decimal(str(entry[2])),
+                    "low": Decimal(str(entry[3])),
+                    "close": Decimal(str(entry[4])),
+                    "volume": Decimal(str(entry[5])),
+                })
+            next_cursor = raw[-1][0] + 1
+            if next_cursor <= cursor:
+                break
+            cursor = next_cursor
+            if len(raw) < 1000:
+                break
+        # Sort by open_time to ensure correct order
+        all_rows.sort(key=lambda x: x["open_time"])
+        return all_rows
