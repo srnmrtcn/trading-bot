@@ -98,6 +98,7 @@ class PaperPosition(Base):
     realized_pnl = Column(Numeric(20, 8), nullable=True)
     equity_before = Column(Numeric(20, 8), nullable=True)
     equity_after = Column(Numeric(20, 8), nullable=True)
+    exit_reason = Column(String, nullable=True)
 
 
 class FundingRate(Base):

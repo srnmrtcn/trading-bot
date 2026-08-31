@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from src.db.models import Symbol, Kline, FetchLog, Scenario, FundingRate
+from src.db.models import Symbol, Kline, FetchLog, Scenario, FundingRate, PaperPosition
 
 
 def test_insert_symbol(db_session):
@@ -199,3 +199,39 @@ def test_funding_rate_row_stores_one_row_per_symbol(db_session):
     row = db_session.get(FundingRate, "BTCUSDT")
     assert row.funding_rate == Decimal("0.00012345")
     assert row.fetched_at == now
+
+
+def test_paper_position_exit_reason_can_be_none_and_forced(db_session):
+    now = datetime(2026, 1, 1, 12, 0, 0)
+    scenario = Scenario(
+        symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), target_price=Decimal("52000"), stop_price=Decimal("49000"),
+        expected_return_pct=Decimal("0.04"), confidence_score=Decimal("0.7"),
+        created_at=now, expires_at=now + timedelta(hours=24), status="pending",
+    )
+    db_session.add(scenario)
+    db_session.commit()
+
+    # Test that exit_reason can be None
+    position1 = PaperPosition(
+        scenario_id=scenario.id, symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), stop_price=Decimal("49000"), target_price=Decimal("52000"),
+        risk_amount=Decimal("100"), position_size=Decimal("0.1"),
+        opened_at=now, status="open", exit_reason=None,
+    )
+    db_session.add(position1)
+    db_session.commit()
+
+    assert position1.exit_reason is None
+
+    # Test that exit_reason can be 'forced'
+    position2 = PaperPosition(
+        scenario_id=scenario.id + 1, symbol="BTCUSDT", direction="long",
+        entry_price=Decimal("50000"), stop_price=Decimal("49000"), target_price=Decimal("52000"),
+        risk_amount=Decimal("100"), position_size=Decimal("0.1"),
+        opened_at=now, status="open", exit_reason="forced",
+    )
+    db_session.add(position2)
+    db_session.commit()
+
+    assert position2.exit_reason == "forced"
