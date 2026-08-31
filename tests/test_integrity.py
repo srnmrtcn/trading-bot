@@ -63,3 +63,39 @@ def test_floor_to_timeframe_aligns_to_candle_boundary():
 def test_floor_to_timeframe_is_idempotent_on_aligned_input():
     aligned = datetime(2026, 1, 1, 13)
     assert floor_to_timeframe(aligned, "1h") == aligned
+
+
+def test_flag_anomalies_with_previous_close_none():
+    rows = [_row("100"), _row("160")]  # 60% jump
+    result = flag_anomalies(rows, previous_close=None)
+    assert result[0]["flagged"] is False  # No spike check for first row when previous_close is None
+    assert result[1]["flagged"] is True
+
+
+def test_flag_anomalies_with_previous_close_zero():
+    rows = [_row("100"), _row("160")]  # 60% jump
+    result = flag_anomalies(rows, previous_close=0)
+    assert result[0]["flagged"] is False  # No spike check for first row when previous_close is 0
+    assert result[1]["flagged"] is True
+
+
+def test_flag_anomalies_with_previous_close_nonzero():
+    rows = [_row("100"), _row("160")]  # 60% jump
+    result = flag_anomalies(rows, previous_close=Decimal("100"))
+    assert result[0]["flagged"] is False  # First row compared to previous_close (no spike)
+    assert result[1]["flagged"] is True  # Second row compared to first row's close
+
+
+def test_flag_anomalies_with_zero_volume_and_previous_close_nonzero():
+    rows = [_row("100", volume="0"), _row("160")]
+    result = flag_anomalies(rows, previous_close=Decimal("100"))
+    assert result[0]["flagged"] is True  # Zero volume flagged
+    assert result[1]["flagged"] is True  # Spike flagged
+
+
+def test_flag_anomalies_batch_consecutive_check():
+    rows = [_row("100"), _row("160"), _row("100")]  # 60% jump, then back to 100
+    result = flag_anomalies(rows, previous_close=Decimal("100"))
+    assert result[0]["flagged"] is False  # First row compared to previous_close (no spike)
+    assert result[1]["flagged"] is True  # Second row compared to first row's close (60% spike)
+    assert result[2]["flagged"] is False  # Third row compared to second row's close (no spike)

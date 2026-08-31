@@ -72,6 +72,24 @@ def get_kline_time_bounds(session: Session, symbol: str, timeframe: str) -> tupl
     return earliest, latest
 
 
+def get_last_close_before(session: Session, symbol: str, timeframe: str, open_time) -> Decimal | None:
+    """Kline.open_time STRICTLY < open_time olanlarin open_time DESC ilk close'unu Decimal dondurur, yoksa None.
+
+    Sadece ayni symbol/timeframe icinde arama yapar.
+    """
+    result = (
+        session.query(Kline.close)
+        .filter(
+            Kline.symbol == symbol,
+            Kline.timeframe == timeframe,
+            Kline.open_time < open_time
+        )
+        .order_by(Kline.open_time.desc())
+        .first()
+    )
+    return result.close if result else None
+
+
 def upsert_klines(session: Session, symbol: str, timeframe: str, rows: list[dict]) -> KlineUpsertResult:
     if not rows:
         return KlineUpsertResult(inserted=0, updated=0)

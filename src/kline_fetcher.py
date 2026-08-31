@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.integrity import flag_anomalies
-from src.storage import upsert_klines
+from src.storage import upsert_klines, get_last_close_before
 
 
 @dataclass
@@ -20,7 +20,11 @@ class FetchResult:
 def fetch_and_store(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> FetchResult:
     try:
         rows = binance_client.get_klines(symbol, timeframe, start_ms, end_ms)
-        flagged_rows = flag_anomalies(rows)
+        previous_close = None
+        if rows and len(rows) > 0:
+            # Get the close price before the first open_time
+            previous_close = get_last_close_before(session, symbol, timeframe, rows[0]['open_time'])
+        flagged_rows = flag_anomalies(rows, previous_close=previous_close)
         upsert_result = upsert_klines(session, symbol, timeframe, flagged_rows)
         flagged_count = sum(1 for row in flagged_rows if row["flagged"])
         return FetchResult(

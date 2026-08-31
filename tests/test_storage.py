@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from src.db.models import Symbol
-from src.storage import get_kline_time_bounds, upsert_symbols, mark_symbols_inactive, upsert_klines
+from src.storage import get_kline_time_bounds, upsert_symbols, mark_symbols_inactive, upsert_klines, get_last_close_before
 
 
 def test_upsert_symbols_inserts_new(db_session):
@@ -78,3 +78,38 @@ def test_get_kline_time_bounds_returns_earliest_and_latest_open_time(db_session)
     assert get_kline_time_bounds(db_session, "BTCUSDT", "1h") == (
         datetime(2026, 1, 1, 1), datetime(2026, 1, 1, 3),
     )
+
+
+def test_get_last_close_before_returns_correct_value(db_session):
+    # Setup test data with specific times
+    upsert_klines(db_session, "BTCUSDT", "1h", [
+        _row(datetime(2026, 1, 1, 1), Decimal("105")),
+        _row(datetime(2026, 1, 1, 2), Decimal("106")),
+        _row(datetime(2026, 1, 1, 3), Decimal("107")),
+    ])
+    
+    # Test case: get last close before time 2026-01-01 2:00 -> should return 105 (from 1:00)
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 2))
+    assert result == Decimal("105")
+
+    # Test case: get last close before time 2026-01-01 3:00 -> should return 106 (from 2:00)
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 3))
+    assert result == Decimal("106")
+
+    # Test case: get last close before time 2026-01-01 4:00 -> should return 107 (from 3:00)
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 4))
+    assert result == Decimal("107")
+
+    # Test case: get last close before time 2026-01-01 0:00 -> should return None (no previous data)
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 0))
+    assert result is None
+
+    # Test case: different symbol should not affect results
+    upsert_klines(db_session, "ETHUSDT", "1h", [_row(datetime(2026, 1, 1, 1), Decimal("200"))])
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 2))
+    assert result == Decimal("105")
+
+    # Test case: different timeframe should not affect results
+    upsert_klines(db_session, "BTCUSDT", "1d", [_row(datetime(2026, 1, 1, 0), Decimal("300"))])
+    result = get_last_close_before(db_session, "BTCUSDT", "1h", datetime(2026, 1, 1, 2))
+    assert result == Decimal("105")

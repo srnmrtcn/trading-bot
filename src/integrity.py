@@ -57,17 +57,26 @@ def detect_gaps(existing_open_times: list, timeframe: str, range_start: datetime
     return gaps
 
 
-def flag_anomalies(rows: list, spike_threshold: Decimal = Decimal("0.5")) -> list:
+def flag_anomalies(rows: list, spike_threshold: Decimal = Decimal("0.5"), previous_close=None) -> list:
     flagged_rows = []
-    previous_close = None
-    for row in rows:
+    for i, row in enumerate(rows):
         is_flagged = False
         if row["volume"] == 0:
             is_flagged = True
-        if previous_close is not None and previous_close != 0:
-            change = abs(row["close"] - previous_close) / previous_close
-            if change > spike_threshold:
-                is_flagged = True
+        # Check for spike only if not the first row or if previous_close is provided and non-zero
+        if i > 0 or (previous_close is not None and previous_close != 0):
+            if i == 0 and previous_close is not None:
+                # Use previous_close for the first row check
+                current_close = row["close"]
+                change = abs(current_close - previous_close) / previous_close
+                if change > spike_threshold:
+                    is_flagged = True
+            elif i > 0:
+                # Normal consecutive comparison
+                current_close = row["close"]
+                prev_close = rows[i-1]["close"]
+                change = abs(current_close - prev_close) / prev_close
+                if change > spike_threshold:
+                    is_flagged = True
         flagged_rows.append({**row, "flagged": is_flagged})
-        previous_close = row["close"]
     return flagged_rows
