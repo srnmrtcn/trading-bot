@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from src.btc_regime import REGIME_LOOKBACK, compute_btc_regime
 from src.db.models import Kline
+from src.indicators import compute_ema
 
 # floor_to_timeframe("1d") zeroes out time-of-day, so NOW's boundary is
 # midnight of the same calendar day.
@@ -46,6 +47,23 @@ def test_compute_btc_regime_returns_down_for_a_falling_series(db_session):
     _seed_daily_closes(db_session, closes)
 
     assert compute_btc_regime(db_session, now=NOW) == "down"
+
+
+def test_regime_uses_eighty_closed_daily_candles():
+    assert REGIME_LOOKBACK == 80
+
+
+def test_twenty_two_candles_are_not_enough_for_regime(db_session):
+    _seed_daily_closes(db_session, [Decimal(100 + i) for i in range(22)])
+    assert compute_btc_regime(db_session, now=NOW) is None
+
+
+def test_eighty_candle_ema21_converges_to_long_history():
+    closes = [Decimal(index) for index in range(1, 201)]
+    full = compute_ema(closes, 21)[-1]
+    truncated = compute_ema(closes[-80:], 21)[-1]
+
+    assert abs(truncated - full) / full < Decimal("0.005")
 
 
 def test_compute_btc_regime_returns_none_with_insufficient_candles(db_session):
