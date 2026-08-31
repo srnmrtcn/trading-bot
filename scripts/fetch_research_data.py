@@ -61,7 +61,31 @@ def most_liquid_futures_symbols(exchange_info: dict, tickers: list, limit: int) 
 
     SAF function - no network calls, only processes given data.
     """
-    raise NotImplementedError
+    # Build volume dictionary from tickers
+    volume_dict = {t["symbol"]: float(t["quoteVolume"]) for t in tickers if "quoteVolume" in t}
+    
+    # Filter symbols based on criteria
+    valid_symbols = []
+    for entry in exchange_info["symbols"]:
+        symbol = entry["symbol"]
+        status = entry["status"]
+        quote_asset = entry["quoteAsset"]
+        contract_type = entry["contractType"]
+        base_asset = entry["baseAsset"]
+        
+        # Apply filters
+        if (status == "TRADING" and 
+            quote_asset == "USDT" and 
+            contract_type == "PERPETUAL" and 
+            base_asset not in STABLECOIN_BASES and
+            symbol in volume_dict):
+            valid_symbols.append(symbol)
+    
+    # Sort by volume descending
+    sorted_symbols = sorted(valid_symbols, key=lambda s: volume_dict[s], reverse=True)
+    
+    # Return top `limit` symbols
+    return sorted_symbols[:limit]
 
 
 def main(argv=None) -> int:
@@ -81,7 +105,13 @@ def main(argv=None) -> int:
 
     end = utc_now()
     start = end - timedelta(days=args.days)
-    symbols = most_liquid_usdt_symbols(args.symbols)
+    
+    # Get futures symbols using new function
+    futures_client = Client(api_key="", api_secret="", requests_params={"timeout": REQUEST_TIMEOUT_SECONDS})
+    exchange_info = futures_client.futures_exchange_info()
+    tickers = futures_client.futures_ticker()
+    symbols = most_liquid_futures_symbols(exchange_info, tickers, args.symbols)
+    
     logging.info("%d symbols, %d days -> %s\n", len(symbols), args.days, RESEARCH_DB_URL)
 
     failed = []
@@ -90,6 +120,7 @@ def main(argv=None) -> int:
             result = process_symbol_timeframe(
                 session, client, symbol, TIMEFRAME,
                 start_ms=to_epoch_ms(start), end_ms=to_epoch_ms(end),
+                market="futures"
             )
             if result.error:
                 logging.warning("[%3d/%d] %-12s FAILED: %s", index, len(symbols), symbol, result.error)
