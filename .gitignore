@@ -7,3 +7,12 @@ venv/
 .superpowers/
 logs/
 data/
+
+# ajan gecici dosyalari
+.ajan/
+.pytest_cache/
+
+# Qwen Code calisma durumu
+.qwen/*
+!.qwen/settings.json
+!.qwen/agents/

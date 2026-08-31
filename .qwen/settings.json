@@ -1,0 +1,65 @@
+{
+  "context": {
+    "fileName": "QWEN.md"
+  },
+  "permissions": {
+    "deny": [
+      "WriteFile(tests/**)",
+      "WriteFile(conftest.py)",
+      "WriteFile(pyproject.toml)",
+      "WriteFile(setup.cfg)",
+      "WriteFile(pytest.ini)",
+      "WriteFile(QWEN.md)",
+      "WriteFile(.qwen/**)",
+      "Edit(tests/**)",
+      "Edit(conftest.py)",
+      "Edit(QWEN.md)",
+      "Edit(.qwen/**)",
+      "write_file(tests/**)",
+      "write_file(conftest.py)",
+      "edit(tests/**)",
+      "edit(conftest.py)",
+      "Shell(git commit)",
+      "Shell(git checkout)",
+      "Shell(git reset)",
+      "Shell(git clean)",
+      "Shell(git stash)",
+      "Shell(git push)",
+      "Shell(rm)",
+      "Shell(pip install)",
+      "Shell(npm install)",
+      "run_shell_command(git commit)",
+      "run_shell_command(git checkout)",
+      "run_shell_command(git reset)",
+      "run_shell_command(rm)"
+    ]
+  },
+  "model": {
+    "maxSessionTurns": 30,
+    "maxToolCalls": 60,
+    "name": "coder-ajan"
+  },
+  "general": {
+    "checkpointing": {
+      "enabled": true
+    }
+  },
+  "privacy": {
+    "usageStatisticsEnabled": false
+  },
+  "security": {
+    "auth": {
+      "selectedType": "openai"
+    }
+  },
+  "tools": {
+    "core": [
+      "read_file",
+      "read_many_files",
+      "write_file",
+      "glob",
+      "search_file_content",
+      "run_shell_command"
+    ]
+  }
+}
