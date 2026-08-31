@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.db.models import Kline, PaperPosition, Scenario
+from src.db.models import Kline, PaperPosition, Scenario, FundingRateHistory
 from src.paper_position_closer import close_resolved_positions
 from src.paper_trading_config import STARTING_EQUITY
 from src.strategy_version import STRATEGY_VERSION
-from src.trading_costs import round_trip_cost
+from src.trading_costs import round_trip_cost, funding_cost
 
 
 def _scenario(symbol="BTCUSDT", direction="long", status="pending",
@@ -240,3 +240,91 @@ def test_realized_pnl_is_booked_net_of_both_legs_of_taker_fees(db_session):
     assert reloaded.equity_before == STARTING_EQUITY
     assert reloaded.equity_after == STARTING_EQUITY + (Decimal("100") - cost)
     assert reloaded.closed_at == datetime(2026, 1, 2)
+
+
+def test_close_resolved_positions_handles_positive_rate_long_funding(db_session):
+    scenario = _scenario(status="hit_target")
+    db_session.add(scenario)
+    db_session.commit()
+    db_session.add(_open_position(scenario))
+    db_session.commit()
+
+    # Add funding rate history with positive rate for long
+    db_session.add(FundingRateHistory(
+        symbol="BTCUSDT",
+        funding_time=datetime(2026, 1, 1, 12),
+        funding_rate=Decimal("0.0001"),  # 0.01% funding rate
+        mark_price=Decimal("100"),
+    ))
+    db_session.commit()
+
+    result = close_resolved_positions(db_session, now=datetime(2026, 1, 2))
+
+    assert result.scanned == 1
+    assert result.closed == 1
+    reloaded = db_session.query(PaperPosition).first()
+    assert reloaded.status == "closed"
+    assert reloaded.exit_price == Decimal("110")
+
+    # Compute expected PnL: gross profit minus round-trip cost minus funding cost
+    gross = Decimal("100")  # 10 * (110 - 100)
+    cost = round_trip_cost(Decimal("10"), Decimal("100"), Decimal("110"))
+    funding_events = [(datetime(2026, 1, 1, 12), Decimal("0.0001"), Decimal("100"))]
+    funding_cost_value = funding_cost("long", Decimal("10"), funding_events)
+    expected_pnl = gross - cost - funding_cost_value
+    assert reloaded.realized_pnl == expected_pnl
+
+
+def test_close_resolved_positions_handles_positive_rate_short_funding(db_session):
+    scenario = _scenario(direction="short", status="hit_stop", target_price=Decimal("90"), stop_price=Decimal("110"))
+    db_session.add(scenario)
+    db_session.commit()
+    db_session.add(_open_position(scenario))
+    db_session.commit()
+
+    # Add funding rate history with positive rate for short
+    db_session.add(FundingRateHistory(
+        symbol="BTCUSDT",
+        funding_time=datetime(2026, 1, 1, 12),
+        funding_rate=Decimal("0.0001"),  # 0.01% funding rate
+        mark_price=Decimal("100"),
+    ))
+    db_session.commit()
+
+    result = close_resolved_positions(db_session)
+
+    assert result.closed == 1
+    reloaded = db_session.query(PaperPosition).first()
+    assert reloaded.status == "closed"
+    assert reloaded.exit_price == Decimal("110")
+
+    # Compute expected PnL: gross loss minus round-trip cost plus funding cost (short receives)
+    gross = Decimal("-100")  # -10 * (110 - 100)
+    cost = round_trip_cost(Decimal("10"), Decimal("100"), Decimal("110"))
+    funding_events = [(datetime(2026, 1, 1, 12), Decimal("0.0001"), Decimal("100"))]
+    funding_cost_value = funding_cost("short", Decimal("10"), funding_events)
+    expected_pnl = gross - cost - funding_cost_value
+    assert reloaded.realized_pnl == expected_pnl
+
+
+def test_close_resolved_positions_handles_no_event_funding(db_session):
+    scenario = _scenario(status="hit_target")
+    db_session.add(scenario)
+    db_session.commit()
+    db_session.add(_open_position(scenario))
+    db_session.commit()
+
+    # No funding events for this position
+    result = close_resolved_positions(db_session, now=datetime(2026, 1, 2))
+
+    assert result.scanned == 1
+    assert result.closed == 1
+    reloaded = db_session.query(PaperPosition).first()
+    assert reloaded.status == "closed"
+    assert reloaded.exit_price == Decimal("110")
+
+    # Compute expected PnL: gross profit minus round-trip cost (no funding)
+    gross = Decimal("100")  # 10 * (110 - 100)
+    cost = round_trip_cost(Decimal("10"), Decimal("100"), Decimal("110"))
+    expected_pnl = gross - cost
+    assert reloaded.realized_pnl == expected_pnl
