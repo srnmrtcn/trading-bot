@@ -62,7 +62,7 @@ def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
     for symbol, now, draft, future in drafts:
         if start_after is not None and now < start_after:
             continue
-        if until is not None and now >= until:
+        if until is not None and draft.expires_at > until:
             continue
         key = (symbol, draft.direction)
         if is_locked(live, key, now):
