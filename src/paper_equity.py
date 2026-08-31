@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from src.db.models import PaperPosition
 from src.paper_trading_config import STARTING_EQUITY
+from src.strategy_version import STRATEGY_VERSION
 
 
 def current_equity(session) -> Decimal:
@@ -14,11 +15,15 @@ def current_equity(session) -> Decimal:
     so the most recently closed position's `equity_after` IS the current
     equity. Before any position has ever closed, equity is the starting
     constant.
+    
+    Only considers positions with the current strategy version and status 'closed'.
+    Legacy or other-version positions are ignored.
     """
     last_closed = (
         session.query(PaperPosition)
         .filter(
             PaperPosition.status == "closed",
+            PaperPosition.strategy_version == STRATEGY_VERSION,
             # A closed row without an `equity_after` carries no equity
             # information; skipping it falls back to the last row that does
             # rather than returning None into every caller's arithmetic.
