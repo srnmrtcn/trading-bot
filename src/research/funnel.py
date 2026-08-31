@@ -10,7 +10,7 @@ from src.outcome_evaluator import evaluate_outcome
 from src.paper_trading_config import TAKER_FEE_RATE
 from src.indicators import compute_ema, compute_rsi, detect_confluence_in_window
 from src.scenario_runner import SCENARIO_LOOKBACK, _window_rejection
-from src.scenario_builder import MAX_EXPIRY_HOURS, build_scenario
+from src.scenario_builder import MAX_EXPIRY_HOURS, MIN_STOP_PCT, build_scenario
 from src.scenario_signal import (
     CONFLUENCE_WINDOW,
     EMA_FAST_PERIOD,
