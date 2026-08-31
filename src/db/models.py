@@ -103,6 +103,22 @@ class PaperPosition(Base):
     strategy_version = Column(String, nullable=True)
 
 
+class FundingRateHistory(Base):
+    __tablename__ = "funding_rate_history"
+    __table_args__ = (
+        UniqueConstraint("symbol", "funding_time", name="uq_funding_history_symbol_time"),
+    )
+
+    # Unlike `funding_rates`, which keeps only the latest print for the gate,
+    # this is the append-only event log a closed paper position is charged
+    # against: which funding events fell inside the window it was open.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    funding_time = Column(DateTime, nullable=False)
+    funding_rate = Column(Numeric(10, 8), nullable=False)
+    mark_price = Column(Numeric(20, 8), nullable=False)
+
+
 class FundingRate(Base):
     __tablename__ = "funding_rates"
 
