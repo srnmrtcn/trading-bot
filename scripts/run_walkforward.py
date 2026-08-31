@@ -69,15 +69,16 @@ def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
             continue
         if not passes_risk_filters(draft, min_stop_pct, min_rr):
             continue
-        live[key] = draft.expires_at
         outcome = resolve_draft(draft, future)
         if outcome is None:
+            live[key] = draft.expires_at
             continue
         risk = abs(draft.entry_price - draft.stop_price)
         net_r = float(outcome.r_multiple - fee_cost_in_r(
             draft.entry_price, outcome.exit_price, risk, TAKER_FEE_RATE,
         ))
         results.append((now, net_r))
+        live[key] = outcome.resolved_at
     return results
 
 

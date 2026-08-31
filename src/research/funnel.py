@@ -122,12 +122,12 @@ def resolve_draft(draft, future_klines: list):
         draft.direction, draft.target_price, draft.stop_price,
         draft.expires_at, future_klines, draft.expires_at + step,
     )
-    status, _resolved_at = outcome
+    status, resolved_at = outcome
     if status == "hit_stop":
-        return DraftOutcome(status, Decimal("-1"), draft.stop_price)
+        return DraftOutcome(status, Decimal("-1"), draft.stop_price, resolved_at)
     if status == "hit_target":
         reward = abs(draft.target_price - draft.entry_price)
-        return DraftOutcome(status, reward / risk, draft.target_price)
+        return DraftOutcome(status, reward / risk, draft.target_price, resolved_at)
 
     # Expired: worth its unrealised move at the last candle that closed
     # before expiry, mirroring paper_position_closer's exit rule.
@@ -141,7 +141,7 @@ def resolve_draft(draft, future_klines: list):
         exit_price - draft.entry_price if draft.direction == "long"
         else draft.entry_price - exit_price
     )
-    return DraftOutcome(status, move / risk, exit_price)
+    return DraftOutcome(status, move / risk, exit_price, resolved_at)
 
 
 def fee_cost_in_r(entry_price: Decimal, exit_price: Decimal, risk: Decimal,
@@ -162,6 +162,7 @@ class DraftOutcome:
     status: str
     r_multiple: Decimal
     exit_price: Decimal
+    resolved_at: object = None
 
 
 @dataclass
@@ -380,6 +381,7 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
 
         scored = resolve_draft(draft, event.future)
         if scored is None:
+            live_until[event.direction] = draft.expires_at
             result.unscored += 1
             continue
         setattr(result, scored.status, getattr(result, scored.status) + 1)
@@ -388,4 +390,5 @@ def backtest_symbol(symbol: str, klines: list, rule: str,
             draft.entry_price, scored.exit_price,
             abs(draft.entry_price - draft.stop_price), TAKER_FEE_RATE,
         )
+        live_until[event.direction] = scored.resolved_at
     return result
