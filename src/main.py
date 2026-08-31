@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 from logging.handlers import RotatingFileHandler
 
 from src.backfill import run_initial_backfill
@@ -36,6 +37,14 @@ def configure_logging(log_file: str = None) -> None:
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers = [console_handler, file_handler]
+
+
+def _raise_system_exit(signum, frame):
+    # Railway sends SIGTERM on every redeploy. Python's default action ends
+    # the process without unwinding, skipping scheduler.shutdown — so an
+    # hourly job dies between two commits. SystemExit rides the same
+    # except/finally path Ctrl+C already uses.
+    raise SystemExit(0)
 
 
 def find_pending_backfills(session, symbols: list, timeframes: list) -> list:
@@ -98,6 +107,7 @@ def run_forever(session_factory, binance_client) -> None:
     port = int(os.environ.get("PORT", 8000))
     app = create_app(session_factory, auth_user, auth_pass_hash)
     scheduler = build_scheduler(session_factory, binance_client)
+    signal.signal(signal.SIGTERM, _raise_system_exit)
     scheduler.start()
     logger.info("Scheduler started, service running")
     try:
@@ -105,7 +115,9 @@ def run_forever(session_factory, binance_client) -> None:
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
-        scheduler.shutdown()
+        # wait=True blocks until the running job returns; Railway's kill
+        # grace (raised in railway.json, Faz 2) is the outer bound.
+        scheduler.shutdown(wait=True)
 
 
 def main() -> None:
