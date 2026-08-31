@@ -2,7 +2,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.btc_regime import REGIME_LOOKBACK
-from src.db.models import Kline, Scenario
+from src.db.models import FundingRate, Kline, Scenario, Symbol
+from src.funding_gate import FUNDING_RATE_THRESHOLD
 from src.scenario_runner import run_scenario_generation, process_symbol_scenario
 from src.scenario_signal import MIN_CANDLES
 
@@ -380,3 +381,41 @@ def test_run_scenario_generation_generates_nothing_when_btc_regime_is_undetermin
 
     assert result.generated == 0
     assert db_session.query(Scenario).count() == 0
+
+
+def _seed_futures_symbol(db_session, symbol, rate, fetched_at=NOW):
+    db_session.add(Symbol(
+        symbol=symbol, base_asset=symbol[:-4], quote_asset="USDT",
+        is_active=True, has_futures_contract=True,
+    ))
+    db_session.add(FundingRate(symbol=symbol, funding_rate=rate, fetched_at=fetched_at))
+    db_session.commit()
+
+
+def test_process_symbol_scenario_skips_a_long_when_longs_are_crowded(db_session):
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+    _seed_futures_symbol(db_session, "BTCUSDT", FUNDING_RATE_THRESHOLD + Decimal("0.0001"))
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "skipped"
+    assert db_session.query(Scenario).count() == 0
+
+
+def test_process_symbol_scenario_generates_when_funding_is_normal(db_session):
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+    _seed_futures_symbol(db_session, "BTCUSDT", Decimal("0.00005955"))
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
+    assert db_session.query(Scenario).count() == 1
+
+
+def test_process_symbol_scenario_ignores_funding_for_a_symbol_without_futures(db_session):
+    """Regression: symbols with no perpetual contract must behave exactly as
+    they did before this gate existed."""
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+    db_session.add(Symbol(
+        symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT",
+        is_active=True, has_futures_contract=False,
+    ))
+    db_session.commit()
+
+    assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
