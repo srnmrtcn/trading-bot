@@ -13,6 +13,7 @@ MAX_EXPIRY_HOURS = 168
 ATR_PERIOD = 20
 SWING_LOOKBACK_K = 3
 RISK_REWARD_CAP = Decimal("3")
+MIN_STOP_PCT = Decimal("0.005")
 
 
 @dataclass
@@ -44,7 +45,7 @@ def build_scenario(symbol: str, signal: SignalResult, klines: list, now: datetim
 
     reward = abs(target - entry)
     risk = abs(entry - stop)
-    if risk == 0:
+    if risk == 0 or risk / entry < MIN_STOP_PCT:
         return None
 
     if signal.direction == "long":
