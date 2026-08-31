@@ -40,6 +40,22 @@ def mark_symbols_inactive(session: Session, active_symbols: set) -> None:
     session.commit()
 
 
+def set_futures_contract_flags(session: Session, futures_symbols: set) -> None:
+    """Bilinen her sembol icin perpetual futures kontrati var mi bilgisini yazar.
+
+    ADIMLAR:
+      1. session.query(Symbol).all() ile TUM sembolleri gez - sadece
+         settekileri degil, hepsini.
+      2. Her biri icin sym.has_futures_contract = sym.symbol in futures_symbols.
+      3. session.commit().
+
+    Neden hepsi: kontrati kaybolan bir sembolun bayragi boylece True kalmaz,
+    False'a doner.
+    """
+    raise NotImplementedError
+
+
+
 def get_kline_time_bounds(session: Session, symbol: str, timeframe: str) -> tuple:
     """Return ``(earliest, latest)`` stored ``open_time`` for a symbol/timeframe.
 

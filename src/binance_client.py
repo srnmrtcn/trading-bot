@@ -34,6 +34,37 @@ class BinanceClient:
                 })
         return results
 
+    def get_futures_usdt_symbols(self) -> set:
+        """USDT-M perpetual futures kontrati olan sembollerin adlari.
+
+        ADIMLAR:
+          1. self._backoff.call(self._client.futures_exchange_info) cagir.
+          2. Donen sozlukteki info["symbols"] listesini gez.
+          3. status == "TRADING" ve quoteAsset == "USDT" ve
+             contractType == "PERPETUAL" olan kayitlarin ["symbol"]
+             degerlerinden bir SET olustur ve don.
+
+        Sadece PERPETUAL kontratlarin gate'in kastettigi anlamda funding
+        rate'i vardir; ceyreklik olanlar (CURRENT_QUARTER, NEXT_QUARTER)
+        vadesinde kapanir.
+        """
+        raise NotImplementedError
+
+    def get_funding_rates(self) -> dict:
+        """Her futures sembolu icin en son funding rate, TEK istekte.
+
+        ADIMLAR:
+          1. self._backoff.call(self._client.futures_mark_price) cagir -
+             PARAMETRESIZ. Parametresiz cagrilinca tum tahtayi (~875 kayit)
+             tek listede donduruyor, sembol basina ayri istek YOK.
+          2. Bos bir sozluk ac. Donen her kayit icin entry.get("lastFundingRate")
+             oku; alan yoksa ya da bos string ise o kaydi ATLA.
+          3. Aksi halde sozluge entry["symbol"] -> Decimal(str(ham)) yaz.
+             Decimal(float) DEGIL - str uzerinden cevir, yoksa hassasiyet kaybolur.
+          4. Sozlugu don.
+        """
+        raise NotImplementedError
+
     def get_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list:
         all_rows = []
         cursor = start_ms
