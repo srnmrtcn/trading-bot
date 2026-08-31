@@ -14,6 +14,8 @@ DELAYED_THRESHOLD = timedelta(hours=4)
 EQUITY_HISTORY_LIMIT = 50
 RECENT_SCENARIOS_LIMIT = 10
 
+STRATEGY_VERSION = "v1"
+
 
 @dataclass
 class SystemHealth:
@@ -52,7 +54,9 @@ def get_system_health(session, now: datetime | None = None) -> SystemHealth:
 def get_equity_summary(session) -> EquitySummary:
     rows = (
         session.query(PaperPosition.closed_at, PaperPosition.equity_after)
-        .filter(PaperPosition.status == "closed")
+        .filter(
+            PaperPosition.status == "closed",
+        )
         .order_by(PaperPosition.closed_at.asc(), PaperPosition.id.asc())
         .all()
     )
@@ -80,7 +84,9 @@ def equity_sparkline_points(history: list[tuple[datetime, Decimal]], width: int 
 def get_open_positions(session) -> list[PaperPosition]:
     return (
         session.query(PaperPosition)
-        .filter(PaperPosition.status == "open")
+        .filter(
+            PaperPosition.status == "open",
+        )
         .order_by(PaperPosition.opened_at.desc(), PaperPosition.id.desc())
         .all()
     )
