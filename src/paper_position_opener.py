@@ -58,21 +58,25 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
         logger.error("Paper portfolio equity is %s — not opening any positions", equity)
         return PositionOpenResult(scanned=0, opened=0, skipped=0, failed=0)
 
-    open_symbols = {
-        row[0] for row in session.query(PaperPosition.symbol).filter(PaperPosition.status == "open").all()
-    }
-    open_count = session.query(PaperPosition).filter(PaperPosition.status == "open").count()
+    # Get all open positions with current strategy version
+    open_positions = session.query(PaperPosition).filter(
+        PaperPosition.status == "open",
+        PaperPosition.strategy_version == STRATEGY_VERSION,
+    ).all()
+    
+    open_symbols = {position.symbol for position in open_positions}
+    open_count = len(open_positions)
+
+    # Calculate total notional of currently open positions with current strategy version
+    total_notional = Decimal("0")
+    for position in open_positions:
+        total_notional += position.position_size * position.entry_price
 
     scanned = 0
     opened = 0
     skipped = 0
     failed = 0
     
-    # Calculate total notional of currently open positions
-    total_notional = Decimal("0")
-    for position in session.query(PaperPosition).filter(PaperPosition.status == "open").all():
-        total_notional += position.position_size * position.entry_price
-
     for scenario in candidates:
         scanned += 1
         scenario_id = scenario.id
