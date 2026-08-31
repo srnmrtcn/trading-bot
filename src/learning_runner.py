@@ -198,8 +198,13 @@ def calibrate_scenarios(session) -> CalibrationResult:
     for scenario in targets:
         key = (scenario.direction, confidence_bucket(scenario.confidence_score))
         rate, _count = rates.get(key, (None, 0))
-        scenario.calibrated_confidence = rate if rate is not None else scenario.confidence_score
-        scenarios_updated += 1
+        if rate is not None:
+            scenario.calibrated_confidence = rate
+            scenarios_updated += 1
+        else:
+            # If rate is None, keep the original confidence score
+            scenario.calibrated_confidence = scenario.confidence_score
+            scenarios_updated += 1
     session.commit()
 
     return CalibrationResult(scenarios_updated=scenarios_updated, patterns_with_data=patterns_with_data)
