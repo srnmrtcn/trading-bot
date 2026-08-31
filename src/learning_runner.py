@@ -16,6 +16,9 @@ logger = logging.getLogger("learning_runner")
 # same candles the signal was read from.
 RESOLUTION_TIMEFRAME = "1h"
 
+# 24 hours grace period for unresolvable scenarios
+UNRESOLVABLE_GRACE = timedelta(hours=24)
+
 
 @dataclass
 class OutcomeResolutionResult:
@@ -23,6 +26,7 @@ class OutcomeResolutionResult:
     resolved: int
     still_pending: int
     failed: int
+    unresolvable: int = 0
 
 
 def _load_resolution_window(session, symbol: str, timeframe: str, since: datetime, until: datetime) -> list:
@@ -111,6 +115,7 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
     resolved = 0
     still_pending = 0
     failed = 0
+    unresolvable = 0
     for scenario in pending:
         scanned += 1
         # Captured before the try block, on purpose. After session.rollback()
@@ -126,15 +131,27 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
             klines = _load_resolution_window(session, symbol, RESOLUTION_TIMEFRAME, since, until)
             missing = _missing_candle_count(klines, RESOLUTION_TIMEFRAME, since, until)
             if missing:
-                # A normal deferral, not an error: it stays pending and is
-                # retried next run, exactly like the still_pending bucket's
-                # other members. Logged at INFO because a window that never
-                # fills in means this scenario is silently stuck.
-                logger.info(
-                    "Deferring scenario %s (%s): %d candle(s) missing from its resolution window",
-                    scenario_id, symbol, missing,
-                )
-                still_pending += 1
+                # Check if the scenario has exceeded its grace period
+                if now > scenario.expires_at + UNRESOLVABLE_GRACE:
+                    logger.info(
+                        "Marking scenario %s (%s) as unresolvable: %d candle(s) missing from its resolution window",
+                        scenario_id, symbol, missing,
+                    )
+                    scenario.status = 'unresolvable'
+                    scenario.resolved_at = now
+                    session.commit()
+                    resolved += 1
+                    unresolvable += 1
+                else:
+                    # A normal deferral, not an error: it stays pending and is
+                    # retried next run, exactly like the still_pending bucket's
+                    # other members. Logged at INFO because a window that never
+                    # fills in means this scenario is silently stuck.
+                    logger.info(
+                        "Deferring scenario %s (%s): %d candle(s) missing from its resolution window",
+                        scenario_id, symbol, missing,
+                    )
+                    still_pending += 1
                 continue
             outcome = evaluate_outcome(
                 scenario.direction, scenario.target_price, scenario.stop_price,
@@ -153,7 +170,7 @@ def resolve_pending_scenarios(session, now: datetime = None) -> OutcomeResolutio
             logger.exception("Outcome resolution failed for scenario %s (%s)", scenario_id, symbol)
             failed += 1
 
-    return OutcomeResolutionResult(scanned=scanned, resolved=resolved, still_pending=still_pending, failed=failed)
+    return OutcomeResolutionResult(scanned=scanned, resolved=resolved, still_pending=still_pending, failed=failed, unresolvable=unresolvable)
 
 
 @dataclass
