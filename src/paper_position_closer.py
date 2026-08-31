@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.db.models import Kline, PaperPosition, Scenario
@@ -13,6 +13,7 @@ from src.timeutil import utc_now
 logger = logging.getLogger("paper_position_closer")
 
 RESOLUTION_TIMEFRAME = "1h"
+UNRESOLVABLE_GRACE = timedelta(hours=1)  # 1 hour
 
 
 @dataclass
@@ -100,8 +101,10 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
             scenario = session.get(Scenario, position.scenario_id)
             if scenario.status == "hit_target":
                 exit_price = scenario.target_price
+                exit_reason = "target"
             elif scenario.status == "hit_stop":
                 exit_price = scenario.stop_price
+                exit_reason = "stop"
             elif scenario.status == "expired":
                 exit_price = _exit_price_for_expired(session, symbol, scenario.expires_at)
                 if exit_price is None:
@@ -109,6 +112,25 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
                         "Deferring paper position %s (%s): no closed candle at/before expiry yet",
                         position_id, symbol,
                     )
+                    still_open += 1
+                    continue
+                exit_reason = "expired"
+            elif scenario.status == "unresolvable":
+                # Check if the position is past its grace period for unresolvable scenarios
+                if now > scenario.expires_at + UNRESOLVABLE_GRACE:
+                    # Try to close with the last known kline price
+                    exit_price = _exit_price_for_expired(session, symbol, scenario.expires_at)
+                    if exit_price is None:
+                        # If no kline available, leave position open
+                        logger.info(
+                            "Deferring paper position %s (%s): no closed candle at/before expiry yet",
+                            position_id, symbol,
+                        )
+                        still_open += 1
+                        continue
+                    exit_reason = "forced"
+                else:
+                    # Still within grace period, leave position open
                     still_open += 1
                     continue
             else:
@@ -127,6 +149,7 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
             position.equity_after = equity_before + realized_pnl
             position.closed_at = now
             position.status = "closed"
+            position.exit_reason = exit_reason
             session.commit()
             closed += 1
         except Exception:
