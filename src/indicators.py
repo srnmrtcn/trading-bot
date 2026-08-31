@@ -15,11 +15,19 @@ def compute_rsi(closes: list, period: int = 14) -> list:
         gains.append(max(change, Decimal("0")))
         losses.append(max(-change, Decimal("0")))
 
-    for i in range(period, len(closes)):
-        window_gains = gains[i - period:i]
-        window_losses = losses[i - period:i]
-        avg_gain = sum(window_gains) / period
-        avg_loss = sum(window_losses) / period
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    if avg_loss == 0:
+        rsi_values[period] = Decimal("100")
+    else:
+        rs = avg_gain / avg_loss
+        rsi_values[period] = Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
+
+    for i in range(period + 1, len(closes)):
+        gain = gains[i - 1]
+        loss = losses[i - 1]
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
         if avg_loss == 0:
             rsi_values[i] = Decimal("100")
         else:

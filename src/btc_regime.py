@@ -13,7 +13,7 @@ EMA_FAST_PERIOD = 9
 EMA_SLOW_PERIOD = 21
 # One more than EMA_SLOW_PERIOD so compute_ema produces a real EMA21 step
 # (not just the seed SMA) at the last index.
-REGIME_LOOKBACK = EMA_SLOW_PERIOD + 1
+REGIME_LOOKBACK = 80
 
 
 def _load_closed_btc_klines(session, before: datetime) -> list:
