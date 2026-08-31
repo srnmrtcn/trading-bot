@@ -330,7 +330,10 @@ def _resolved_scenario(symbol, direction, confidence_score, status):
     )
 
 
-def test_calibrate_scenarios_falls_back_to_raw_score_below_min_samples(db_session):
+def test_calibrate_scenarios_leaves_calibration_null_below_min_samples(db_session):
+    """Below MIN_SAMPLES the bucket has no rate, and the raw score is NOT a
+    substitute: the opener requires `calibrated_confidence IS NOT NULL`, so
+    copying the raw score here would open positions on an uncalibrated guess."""
     pending = _pending_scenario(symbol="BTCUSDT", direction="long")
     pending.confidence_score = Decimal("0.65")
     db_session.add(pending)
@@ -338,10 +341,10 @@ def test_calibrate_scenarios_falls_back_to_raw_score_below_min_samples(db_sessio
 
     result = calibrate_scenarios(db_session)
 
-    assert result.scenarios_updated == 1
+    assert result.scenarios_updated == 0
     assert result.patterns_with_data == 0
     reloaded = db_session.query(Scenario).first()
-    assert reloaded.calibrated_confidence == Decimal("0.65")
+    assert reloaded.calibrated_confidence is None
 
 
 def test_calibrate_scenarios_uses_computed_rate_at_min_samples(db_session):
@@ -462,6 +465,10 @@ def test_run_learning_cycle_survives_a_resolution_failure(db_session, monkeypatc
     """Calibration already ran and is not undone by resolution blowing up."""
     import src.learning_runner as learning_runner_module
 
+    for _ in range(15):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_target"))
+    for _ in range(5):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_stop"))
     pending = _pending_scenario(symbol="BTCUSDT", direction="long")
     pending.confidence_score = Decimal("0.65")
     db_session.add(pending)
@@ -478,7 +485,8 @@ def test_run_learning_cycle_survives_a_resolution_failure(db_session, monkeypatc
     assert result.scenarios_calibrated == 1
     assert result.resolved == 0
     assert result.failed == 0
-    assert db_session.query(Scenario).first().calibrated_confidence == Decimal("0.65")
+    reloaded = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
+    assert reloaded.calibrated_confidence == Decimal("15") / Decimal("20")
 
 
 def test_run_learning_cycle_survives_a_calibration_failure(db_session, monkeypatch):

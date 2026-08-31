@@ -31,7 +31,7 @@ def _scenario(
     )
 
 
-def test_1_yetersiz_ornek(db_session):
+def test_leaves_calibration_null_below_min_samples(db_session):
     # 19 guncel 'hit_target' + 1 guncel pending
     for i in range(19):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
@@ -45,7 +45,7 @@ def test_1_yetersiz_ornek(db_session):
     assert pending.calibrated_confidence is None
 
 
-def test_2_yeterli_ornek(db_session):
+def test_assigns_the_computed_rate_at_min_samples(db_session):
     # 8 'hit_target' + 12 'hit_stop' (20 guncel) + 1 guncel pending
     for i in range(8):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
@@ -61,7 +61,7 @@ def test_2_yeterli_ornek(db_session):
     assert pending.calibrated_confidence == Decimal("8") / Decimal("20")
 
 
-def test_3_eski_surum_havuza_girmez(db_session):
+def test_legacy_version_rows_do_not_feed_the_pool(db_session):
     # 20 satirin hepsi strategy_version='2026.01.legacy-v0' 'hit_target', + 1 guncel pending
     for i in range(20):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target", strategy_version="2026.01.legacy-v0"))
@@ -75,7 +75,7 @@ def test_3_eski_surum_havuza_girmez(db_session):
     assert pending.calibrated_confidence is None
 
 
-def test_4_eski_surum_pending_hedef_degildir(db_session):
+def test_legacy_version_pending_rows_are_never_targets(db_session):
     # 20 guncel 'hit_target' + 1 eski surumlu pending
     for i in range(20):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
@@ -89,7 +89,7 @@ def test_4_eski_surum_pending_hedef_degildir(db_session):
     assert pending.calibrated_confidence is None
 
 
-def test_5_unresolvable_havuza_girmez(db_session):
+def test_unresolvable_rows_are_excluded_from_the_pool(db_session):
     # 19 guncel 'hit_target' + 1 guncel 'unresolvable' + 1 guncel pending
     for i in range(19):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
@@ -104,7 +104,7 @@ def test_5_unresolvable_havuza_girmez(db_session):
     assert pending.calibrated_confidence is None
 
 
-def test_6_expired_havuzda_kalir(db_session):
+def test_expired_rows_stay_in_the_pool_denominator(db_session):
     # 15 guncel 'hit_target' + 5 guncel 'expired' + 1 guncel pending
     for i in range(15):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
@@ -120,7 +120,7 @@ def test_6_expired_havuzda_kalir(db_session):
     assert pending.calibrated_confidence == Decimal("15") / Decimal("20")
 
 
-def test_7_zaten_kalibre_edilmis_pending_satir_hedef_degildir(db_session):
+def test_already_calibrated_pending_rows_are_not_retargeted(db_session):
     # 20 guncel 'hit_target' + calibrated_confidence'i Decimal('0.42') olan guncel bir pending
     for i in range(20):
         db_session.add(_scenario(f"RES{i}USDT", status="hit_target"))
