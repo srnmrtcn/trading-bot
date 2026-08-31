@@ -1,7 +1,9 @@
-sqlalchemy>=2.0,<2.1
-psycopg2-binary>=2.9,<3.0
-python-binance>=1.0.19,<2.0
-requests>=2.31,<3.0
-apscheduler>=3.10,<4.0
-pytest>=7.4,<8.0
-flask>=3.0,<4.0
+# Pinned to exactly what production resolved on 2026-08-31 (Railpack build log),
+# so a deploy installs the set that is running now rather than whatever PyPI
+# offers that day. Bump deliberately, one line at a time.
+SQLAlchemy==2.0.52
+psycopg2-binary==2.9.12
+python-binance==1.0.37
+requests==2.34.2
+APScheduler==3.11.3
+Flask==3.1.3
