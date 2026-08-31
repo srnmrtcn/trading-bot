@@ -40,6 +40,16 @@ def test_init_configures_a_request_timeout_so_the_client_never_hangs_forever():
         assert timeout is not None and timeout > 0
 
 
+def test_init_never_pings_binance_so_an_outage_cannot_crash_the_boot():
+    # python-binance's Client pings the API inside __init__ by default. That
+    # call sits outside every try/except in main.startup, so a DNS failure or
+    # a temporary IP ban at boot would take the whole service down with it.
+    with patch("src.binance_client.Client") as mock_client_cls:
+        BinanceClient()
+        _, kwargs = mock_client_cls.call_args
+        assert kwargs.get("ping") is False
+
+
 def test_get_active_usdt_symbols_filters_trading_and_usdt():
     fake = _FakeClient(exchange_info={"symbols": [
         {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT", "status": "TRADING"},

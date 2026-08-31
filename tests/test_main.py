@@ -1,8 +1,11 @@
 import logging
+import signal
 from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from decimal import Decimal
 from unittest.mock import patch
+
+import pytest
 
 import src.main as main_module
 from src.db.models import Kline, Symbol
@@ -173,8 +176,8 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
         def start(self):
             calls.append("scheduler.start")
 
-        def shutdown(self):
-            calls.append("scheduler.shutdown")
+        def shutdown(self, wait=True):
+            calls.append(("scheduler.shutdown", wait))
 
     class _FakeApp:
         def run(self, host, port, debug=None, use_reloader=None):
@@ -208,7 +211,9 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
         "build_scheduler",
         "scheduler.start",
         ("app.run", "0.0.0.0", 9000, False, False),
-        "scheduler.shutdown",
+        # wait=True: a redeploy's SIGTERM must let the in-flight hourly job
+        # finish its commit instead of dropping it mid-step.
+        ("scheduler.shutdown", True),
     ]
 
 
@@ -219,7 +224,7 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
         def start(self):
             pass
 
-        def shutdown(self):
+        def shutdown(self, wait=True):
             pass
 
     class _FakeApp:
@@ -238,3 +243,41 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
     main_module.run_forever(session_factory=lambda: None, binance_client=None)
 
     assert calls == [("app.run", "0.0.0.0", 8000, False, False)]
+
+
+def test_sigterm_handler_raises_system_exit_so_the_finally_block_runs():
+    # Python's default SIGTERM action ends the process without unwinding —
+    # no `finally`, no scheduler.shutdown. Turning it into SystemExit reuses
+    # the existing except/finally path that Ctrl+C already takes.
+    with pytest.raises(SystemExit):
+        main_module._raise_system_exit(signal.SIGTERM, None)
+
+
+def test_run_forever_installs_the_sigterm_handler_before_serving(monkeypatch):
+    installed = {}
+
+    def _fake_signal(signum, handler):
+        installed[signum] = handler
+
+    class _FakeScheduler:
+        def start(self):
+            pass
+
+        def shutdown(self, wait=True):
+            pass
+
+    class _FakeApp:
+        def run(self, host, port, debug=None, use_reloader=None):
+            raise SystemExit()
+
+    monkeypatch.setattr(main_module.signal, "signal", _fake_signal)
+    monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
+    monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))
+    monkeypatch.setattr(
+        main_module, "create_app",
+        lambda session_factory, auth_user, auth_pass_hash: _FakeApp(),
+    )
+
+    main_module.run_forever(session_factory=lambda: None, binance_client=None)
+
+    assert installed[signal.SIGTERM] is main_module._raise_system_exit

@@ -386,16 +386,22 @@ def test_run_timeframe_job_generates_scenarios_after_1h_fetch(db_session, monkey
 
     calls = []
 
-    def fake_run_scenario_generation(session, symbols):
+    def fake_run_scenario_generation(session, symbols, now=None):
         from src.scenario_runner import ScenarioRunResult
-        calls.append(list(symbols))
+        calls.append((list(symbols), now))
         return ScenarioRunResult(scanned=len(symbols), generated=0, skipped=len(symbols), failed=0)
 
     monkeypatch.setattr(scheduler_module, "run_scenario_generation", fake_run_scenario_generation)
 
-    run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
+    job_now = datetime(2026, 1, 5, 4, 5, 0)
+    run_timeframe_job(
+        session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h", now=job_now,
+    )
 
-    assert calls == [["BTCUSDT"]]
+    # The job's own `end` is threaded through, the same instant learning and
+    # paper trading get. Otherwise a fetch that crosses the hour boundary
+    # makes scenario generation read a 5-minute stub as a closed candle.
+    assert calls == [(["BTCUSDT"], job_now)]
 
 
 def test_run_timeframe_job_survives_a_scenario_generation_failure(db_session, caplog, monkeypatch):
@@ -404,7 +410,7 @@ def test_run_timeframe_job_survives_a_scenario_generation_failure(db_session, ca
     db_session.add(Symbol(symbol="BTCUSDT", base_asset="BTC", quote_asset="USDT", is_active=True))
     db_session.commit()
 
-    def boom(session, symbols):
+    def boom(session, symbols, now=None):
         raise RuntimeError("scenario generation exploded")
 
     monkeypatch.setattr(scheduler_module, "run_scenario_generation", boom)
@@ -425,7 +431,7 @@ def test_run_timeframe_job_does_not_generate_scenarios_for_1d(db_session, monkey
     calls = []
     monkeypatch.setattr(
         scheduler_module, "run_scenario_generation",
-        lambda session, symbols: calls.append(list(symbols)),
+        lambda session, symbols, now=None: calls.append(list(symbols)),
     )
 
     run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1d")
@@ -560,7 +566,7 @@ def test_hourly_job_refreshes_btc_daily_candle_before_generating_scenarios(db_se
     client = _FakeBinanceClient()
     order = []
 
-    def fake_run_scenario_generation(session, symbols):
+    def fake_run_scenario_generation(session, symbols, now=None):
         from src.scenario_runner import ScenarioRunResult
         order.append("scenarios")
         return ScenarioRunResult(scanned=0, generated=0, skipped=0, failed=0)
@@ -608,7 +614,7 @@ def test_run_timeframe_job_refreshes_funding_before_generating_scenarios(db_sess
         order.append("funding")
         return FundingRefreshResult(updated=3, missing=0)
 
-    def fake_run_scenario_generation(session, symbols):
+    def fake_run_scenario_generation(session, symbols, now=None):
         from src.scenario_runner import ScenarioRunResult
         order.append("scenarios")
         return ScenarioRunResult(scanned=0, generated=0, skipped=0, failed=0)

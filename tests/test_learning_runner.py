@@ -369,6 +369,31 @@ def test_calibrate_scenarios_does_not_touch_already_calibrated_rows(db_session):
     assert reloaded.calibrated_confidence == Decimal("0.42")
 
 
+def test_calibrate_scenarios_never_scores_a_resolved_row_by_its_own_outcome(db_session):
+    # A resolved scenario that somehow reached this point uncalibrated (a
+    # calibration failure in the run it resolved, or a row that predates the
+    # column) is already in the pool its rate is computed from. Scoring it
+    # now would be post-hoc; leave it NULL so nothing downstream mistakes it
+    # for a prediction.
+    for _ in range(20):
+        db_session.add(_resolved_scenario("ETHUSDT", "long", Decimal("0.65"), "hit_target"))
+    orphan = _resolved_scenario("BTCUSDT", "long", Decimal("0.65"), "hit_target")
+    orphan.calibrated_confidence = None
+    db_session.add(orphan)
+    pending = _pending_scenario(symbol="SOLUSDT", direction="long")
+    pending.confidence_score = Decimal("0.65")
+    db_session.add(pending)
+    db_session.commit()
+
+    result = calibrate_scenarios(db_session)
+
+    assert result.scenarios_updated == 1
+    reloaded_orphan = db_session.query(Scenario).filter(Scenario.symbol == "BTCUSDT").first()
+    assert reloaded_orphan.calibrated_confidence is None
+    reloaded_pending = db_session.query(Scenario).filter(Scenario.symbol == "SOLUSDT").first()
+    assert reloaded_pending.calibrated_confidence == Decimal("1")
+
+
 def test_run_learning_cycle_resolves_and_calibrates_end_to_end(db_session):
     """Real klines, real scenario, all the way to a persisted, calibrated row —
     a stub or monkeypatched version of this test would not catch a broken wire
