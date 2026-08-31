@@ -35,4 +35,21 @@ def funding_rejection(session, symbol: str, direction: str, now: datetime) -> st
 
     Karsilastirmalar KESIN (> / <): tam esik degerinde engellenmez.
     """
-    raise NotImplementedError
+    symbol_row = session.get(Symbol, symbol)
+    if not symbol_row or not symbol_row.has_futures_contract:
+        return None
+
+    funding_row = session.get(FundingRate, symbol)
+    if not funding_row:
+        return "no funding data"
+
+    if now - funding_row.fetched_at > FUNDING_DATA_MAX_AGE:
+        return "stale funding data"
+
+    rate = funding_row.funding_rate
+    if direction == "long" and rate > FUNDING_RATE_THRESHOLD:
+        return "crowded long"
+    elif direction == "short" and rate < -FUNDING_RATE_THRESHOLD:
+        return "crowded short"
+
+    return None

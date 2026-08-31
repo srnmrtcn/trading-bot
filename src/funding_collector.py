@@ -38,4 +38,39 @@ def refresh_funding_rates(session, binance_client, now: datetime = None) -> Fund
     ozetinin arkasina saklardi - BTC rejim filtresinin incelemesinde cikan
     korlugun ta kendisi.
     """
-    raise NotImplementedError
+    if now is None:
+        now = utc_now()
+
+    try:
+        rates = binance_client.get_funding_rates()
+    except Exception:
+        raise
+
+    symbols = session.query(Symbol).filter(Symbol.has_futures_contract == True).all()
+    updated = 0
+    missing = 0
+
+    for symbol in symbols:
+        rate = rates.get(symbol.symbol)
+        funding_rate_row = session.get(FundingRate, symbol.symbol)
+        if rate is None:
+            missing += 1
+        else:
+            if funding_rate_row is None:
+                session.add(FundingRate(
+                    symbol=symbol.symbol,
+                    funding_rate=rate,
+                    fetched_at=now,
+                ))
+            else:
+                funding_rate_row.funding_rate = rate
+                funding_rate_row.fetched_at = now
+            updated += 1
+
+    session.commit()
+
+    if not rates:
+        logger.warning("no funding rates")
+
+    logger.info("funding rates refreshed: updated=%d, missing=%d", updated, missing)
+    return FundingRefreshResult(updated=updated, missing=missing)

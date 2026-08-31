@@ -6,6 +6,7 @@ from datetime import datetime
 
 from src.btc_regime import compute_btc_regime
 from src.db.models import Kline
+from src.funding_gate import funding_rejection
 from src.integrity import TIMEFRAME_DELTAS, floor_to_timeframe
 from src.scenario_builder import build_scenario
 from src.scenario_signal import MIN_CANDLES, evaluate_signal
@@ -113,6 +114,11 @@ def process_symbol_scenario(session, symbol: str, regime: str | None, timeframe:
     if signal.direction == "long" and regime != "up":
         return "skipped"
     if signal.direction == "short" and regime != "down":
+        return "skipped"
+
+    funding_block = funding_rejection(session, symbol, signal.direction, now)
+    if funding_block is not None:
+        logger.debug("Skipping %s: %s", symbol, funding_block)
         return "skipped"
 
     if has_pending_scenario(session, symbol, signal.direction, now):

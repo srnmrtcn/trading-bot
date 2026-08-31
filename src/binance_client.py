@@ -48,7 +48,14 @@ class BinanceClient:
         rate'i vardir; ceyreklik olanlar (CURRENT_QUARTER, NEXT_QUARTER)
         vadesinde kapanir.
         """
-        raise NotImplementedError
+        info = self._backoff.call(self._client.futures_exchange_info)
+        results = set()
+        for entry in info["symbols"]:
+            if (entry["status"] == "TRADING" and
+                    entry["quoteAsset"] == "USDT" and
+                    entry["contractType"] == "PERPETUAL"):
+                results.add(entry["symbol"])
+        return results
 
     def get_funding_rates(self) -> dict:
         """Her futures sembolu icin en son funding rate, TEK istekte.
@@ -63,7 +70,14 @@ class BinanceClient:
              Decimal(float) DEGIL - str uzerinden cevir, yoksa hassasiyet kaybolur.
           4. Sozlugu don.
         """
-        raise NotImplementedError
+        mark_price = self._backoff.call(self._client.futures_mark_price)
+        results = {}
+        for entry in mark_price:
+            rate = entry.get("lastFundingRate")
+            if not rate:
+                continue
+            results[entry["symbol"]] = Decimal(str(rate))
+        return results
 
     def get_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list:
         all_rows = []
