@@ -9,11 +9,16 @@ This file provides guidance to coding agents working in this repository.
 - Kod satırlarında sade davran: gereksiz soyutlama, fazladan yorum veya ihtiyaç olmayan karmaşıklık ekleme.
 - Her büyük task'ten sonra code review yap (code-review skill'i ile).
 - Kullanıcı onaylayıp test edilmiş her değişiklikten sonra main branch'e GitHub'a push et — Railway otomatik rebuild/deploy ediyor.
+- Kural ya da parametre değiştiren her değişiklik `src/strategy_version.py` içindeki
+  `STRATEGY_VERSION` sabitini artırır. Kalibrasyon havuzu, paper equity, açık pozisyon
+  sayımları ve dashboard hep bu sabite göre süzülüyor: eski sürümün satırları silinmiyor
+  ama okunmuyor da. Sabiti artırmadan kural değiştirmek, iki farklı stratejinin sonucunu
+  tek bir ölçüme karıştırır.
 
 ## Komutlar
 
 ```bash
-python3 -m pytest -q                  # tüm testler (~270, sqlite:///:memory:, ağ gerektirmez)
+python3 -m pytest -q                  # tüm testler (387, sqlite:///:memory:, ağ gerektirmez)
 python3 -m pytest tests/test_x.py -q -k isim_parcasi   # tek test
 PYTHONPATH=. python3 -m src.main      # servisi çalıştır (DATABASE_URL + BASIC_AUTH_* gerekir)
 ```

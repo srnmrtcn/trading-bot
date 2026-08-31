@@ -46,7 +46,7 @@ Binance `exchangeInfo` endpoint'inden aktif tüm USDT paritelerini çeker. Günd
 `python-binance` kütüphanesi ile 1h ve 1d mum verisi çeker. Binance'in ağırlık bazlı (weight-based) rate limitine uygun şekilde istekleri gruplar/aralıklandırır; 429/418 yanıtlarında exponential backoff + Binance'in `Retry-After` başlığına uyar.
 
 ### Backfill Engine
-İlk kurulumda her sembol için son 2 yıllık geçmiş veriyi çeker. Sonrasında Integrity Checker bir gap tespit ettiğinde, yalnızca eksik aralığı otomatik olarak doldurur. Yeni listelenen bir coin eklendiğinde de otomatik olarak tetiklenir.
+İlk kurulumda her sembol için son 90 günlük geçmiş veriyi çeker (`DEFAULT_BACKFILL_DAYS`). Sonrasında Integrity Checker bir gap tespit ettiğinde, yalnızca eksik aralığı otomatik olarak doldurur. Yeni listelenen bir coin eklendiğinde de otomatik olarak tetiklenir.
 
 ### Integrity Checker
 Her yazım öncesi/sonrası şu kontrolleri yapar:

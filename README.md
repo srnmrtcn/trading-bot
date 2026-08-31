@@ -29,7 +29,8 @@ python -m src.main
 ```
 
 İlk çalıştırmada: sembol listesi çekilir, henüz hiç mumu olmayan her
-sembol/timeframe çifti için son 2 yıllık geçmiş veri (backfill) indirilir,
+sembol/timeframe çifti için son 90 günlük geçmiş veri (backfill) indirilir
+(`DEFAULT_BACKFILL_DAYS`),
 ardından zamanlayıcı devreye girer (1h mumlar için saatlik, 1d mumlar için
 günlük, sembol listesi için günlük). Her saatlik/günlük çalıştırma, normal
 çekimden sonra son 30 günde eksik kalan mumları da otomatik olarak tamamlar.
@@ -79,17 +80,27 @@ mum verisiyle değerlendirilir: hedefe ulaştıysa `hit_target`, stop'a vurduysa
 olarak işaretlenir. Ardından yön + confidence aralığı desenine göre geçmiş başarı oranı
 hesaplanır (`hit_target / (hit_target + hit_stop + expired)`); bir desen için en az 20
 çözümlenmiş örnek varsa bu oran, henüz kalibre edilmemiş senaryolara `calibrated_confidence`
-olarak yazılır — yetersiz veri varsa ham `confidence_score` kullanılır. `calibrated_confidence`
-bir kez atanır ve tekrar üzerine yazılmaz.
+olarak yazılır. Yetersiz veri varsa alan **NULL bırakılır** — ham `confidence_score`
+kopyalanmaz, çünkü paper açılışı `calibrated_confidence IS NOT NULL` şartı arıyor: kalibre
+edilmemiş bir tahminle pozisyon açılmaz. Havuza yalnızca güncel `STRATEGY_VERSION`'ın
+`hit_target` / `hit_stop` / `expired` satırları girer; `unresolvable` olanlar bir sonucu
+temsil etmediği için dışarıda kalır. `calibrated_confidence` bir kez atanır ve tekrar
+üzerine yazılmaz.
 
 ## Paper Test Portföyü
 
-Öğrenme döngüsünün hemen ardından, kalibre edilmiş güveni (`calibrated_confidence`) 0.65 ve üzeri
-olan `pending` senaryolar için simüle bir paper pozisyon açılır — sabit sermayeli (10000, nominal
+Öğrenme döngüsünün hemen ardından, **beklenti kapısını** geçen `pending` senaryolar için simüle
+bir paper pozisyon açılır. Eşik isabet oranı değil beklentidir:
+`expected_r = p·rr − (1 − p) − maliyet_r` (`p` = `calibrated_confidence`,
+`rr` = `|hedef−giriş| / |giriş−stop|`, maliyet iki bacağın komisyon + slippage'ı);
+`expected_r > MIN_EXPECTED_R` ise açılır. Senaryonun ayrıca taze olması gerekir —
+`created_at` son bir saat içinde olmalı — sabit sermayeli (10000, nominal
 bir referans; yalnızca yüzdesel getiri anlamlıdır), sabit-oransal risk (%1) ile boyutlandırılır:
 pozisyon büyüklüğü `equity × %1 / |entry - stop|` olarak hesaplanır. Aynı sembolde zaten açık bir
-pozisyon varsa veya eşzamanlı açık pozisyon sayısı 10'a ulaştıysa yeni pozisyon açılmaz. Bir
-senaryo en fazla bir kez paper pozisyona dönüşür.
+pozisyon varsa, eşzamanlı açık pozisyon sayısı 10'a ulaştıysa ya da açık pozisyonların toplam
+notional'ı equity'nin 10 katını aşacaksa yeni pozisyon açılmaz. Bu üç sayım da yalnızca güncel
+`STRATEGY_VERSION`'lı açık pozisyonları kapsar. Bir senaryo en fazla bir kez paper pozisyona
+dönüşür.
 
 Bir senaryo sonuçlandığında (Öğrenme Döngüsü tarafından), ilişkili paper pozisyon aynı çalıştırmada
 kapatılır: `hit_target` → hedef fiyattan, `hit_stop` → stop fiyatından, `expired` → süre dolduğunda
