@@ -92,6 +92,13 @@ def summarise(results):
     return n, mean, 1.96 * statistics.stdev(results) / (n ** 0.5)
 
 
+def bootstrap_interval(samples, iterations=1000, seed=0):
+    """
+    samples: (now, net_r) ikilileri listesi. Saat-bloklu bootstrap ile (%2.5, %97.5) ikilisi dondurur; ikisi de float.
+    """
+    raise NotImplementedError
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--train-frac", type=float, default=0.7)
