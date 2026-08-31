@@ -86,5 +86,12 @@ def test_7_training_and_test_periods_do_not_overlap():
     SINIR = datetime(2026, 3, 1)
     d1 = _draft('BTC', SINIR - timedelta(hours=12), SINIR - timedelta(hours=2))
     d2 = _draft('ETH', SINIR + timedelta(hours=2), SINIR + timedelta(hours=12))
-    result = score([_kayit(d1), _kayit(d2)], None, None, until=SINIR, start_after=SINIR)
-    assert len(result) == 2
+    # Iki AYRI cagri: bir senaryo hem sinirdan once kapanip hem sinirdan sonra
+    # acilamaz, o yuzden iki filtreyi tek cagrida birlestirmek her zaman bos
+    # doner. Ayrimin dogru oldugunu gosteren sey, iki dilimin ORTUSMEDEN
+    # butunu kapsamasi.
+    egitim = score([_kayit(d1), _kayit(d2)], None, None, until=SINIR)
+    test = score([_kayit(d1), _kayit(d2)], None, None, start_after=SINIR)
+    assert len(egitim) == 1
+    assert len(test) == 1
+    assert len(egitim) + len(test) == 2
