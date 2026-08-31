@@ -40,6 +40,7 @@ REGIME_SYMBOL = "BTCUSDT"
 REGIME_TIMEFRAME = "1d"
 REGIME_PADDING_DAYS = 60
 
+STABLECOIN_BASES = {"USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USDD", "EUR", "AEUR"}
 
 def most_liquid_usdt_symbols(limit: int) -> list:
     """Active USDT spot pairs, most-traded first. See the module docstring."""
@@ -53,6 +54,14 @@ def most_liquid_usdt_symbols(limit: int) -> list:
         key=lambda t: float(t["quoteVolume"]), reverse=True,
     )
     return [t["symbol"] for t in ranked[:limit]]
+
+
+def most_liquid_futures_symbols(exchange_info: dict, tickers: list, limit: int) -> list:
+    """Active USDT perpetual futures pairs, most-traded first.
+
+    SAF function - no network calls, only processes given data.
+    """
+    raise NotImplementedError
 
 
 def main(argv=None) -> int:
