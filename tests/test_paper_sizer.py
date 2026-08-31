@@ -47,8 +47,20 @@ def test_size_position_caps_notional_at_max_leverage():
         stop_price=Decimal("99.99"), risk_pct=Decimal("0.01"),
     )
 
+    assert position_size == Decimal("300")
     assert position_size * Decimal("100") == Decimal("10000") * MAX_LEVERAGE
-    assert risk_amount == Decimal("100"), "the intended risk is unchanged; only the size is clamped"
+    assert risk_amount == Decimal("3.00")
+    assert risk_amount == position_size * abs(Decimal("100") - Decimal("99.99"))
+
+
+def test_size_position_preserves_target_risk_exactly_at_the_leverage_boundary():
+    risk_amount, position_size = size_position(
+        equity=Decimal("10000"), entry_price=Decimal("100"),
+        stop_price=Decimal("99"), risk_pct=Decimal("0.03"),
+    )
+
+    assert position_size == Decimal("300")
+    assert risk_amount == Decimal("300")
 
 
 def test_size_position_refuses_to_size_against_non_positive_equity():
