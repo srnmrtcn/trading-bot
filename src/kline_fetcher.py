@@ -17,9 +17,14 @@ class FetchResult:
     error: str = None
 
 
-def fetch_and_store(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> FetchResult:
+def fetch_and_store(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int, market: str = "spot") -> FetchResult:
     try:
-        rows = binance_client.get_klines(symbol, timeframe, start_ms, end_ms)
+        if market == "spot":
+            rows = binance_client.get_klines(symbol, timeframe, start_ms, end_ms)
+        elif market == "futures":
+            rows = binance_client.get_futures_klines(symbol, timeframe, start_ms, end_ms)
+        else:
+            raise ValueError(f"unknown market {market!r}")
         previous_close = None
         if rows and len(rows) > 0:
             # Get the close price before the first open_time
@@ -36,7 +41,7 @@ def fetch_and_store(session, binance_client, symbol: str, timeframe: str, start_
         return FetchResult(symbol=symbol, timeframe=timeframe, fetched=0, inserted=0, updated=0, flagged=0, error=str(exc))
 
 
-def process_symbol_timeframe(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int) -> FetchResult:
+def process_symbol_timeframe(session, binance_client, symbol: str, timeframe: str, start_ms: int, end_ms: int, market: str = "spot") -> FetchResult:
     """Fetch-and-store one symbol/timeframe with session isolation.
 
     ``fetch_and_store`` may fail mid-flush/commit (e.g. a DB constraint
@@ -45,7 +50,7 @@ def process_symbol_timeframe(session, binance_client, symbol: str, timeframe: st
     here keeps one symbol's failure from poisoning the rest of the batch, so
     every caller inherits the same isolation policy.
     """
-    result = fetch_and_store(session, binance_client, symbol, timeframe, start_ms, end_ms)
+    result = fetch_and_store(session, binance_client, symbol, timeframe, start_ms, end_ms, market=market)
     if result.error:
         session.rollback()
     return result
