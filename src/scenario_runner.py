@@ -126,6 +126,7 @@ def process_symbol_scenario(session, symbol: str, regime: str | None, timeframe:
 
     draft = build_scenario(symbol, signal, klines, now)
     if draft is None:
+        logger.debug("Skipping %s: stop_too_tight", symbol)
         return "skipped"
 
     insert_scenario(session, draft)
