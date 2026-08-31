@@ -4,6 +4,7 @@ from decimal import Decimal
 from src.db.models import Kline, PaperPosition, Scenario
 from src.paper_position_closer import close_resolved_positions
 from src.paper_trading_config import STARTING_EQUITY
+from src.strategy_version import STRATEGY_VERSION
 
 
 def _scenario(symbol="BTCUSDT", direction="long", status="pending",
@@ -17,6 +18,7 @@ def _scenario(symbol="BTCUSDT", direction="long", status="pending",
         expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
         created_at=created_at, expires_at=expires_at, status=status,
         calibrated_confidence=Decimal("0.7"),
+        strategy_version=STRATEGY_VERSION,
     )
 
 
@@ -26,6 +28,7 @@ def _open_position(scenario, size=Decimal("10")):
         entry_price=scenario.entry_price, stop_price=scenario.stop_price, target_price=scenario.target_price,
         risk_amount=Decimal("100"), position_size=size,
         opened_at=scenario.created_at, status="open",
+        strategy_version=STRATEGY_VERSION,
     )
 
 

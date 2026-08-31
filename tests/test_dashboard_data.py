@@ -10,6 +10,7 @@ from src.dashboard_data import (
 )
 from src.db.models import FetchLog, PaperPosition, Scenario
 from src.paper_trading_config import STARTING_EQUITY
+from src.strategy_version import STRATEGY_VERSION
 
 
 def _log(finished_at):
@@ -28,6 +29,7 @@ def _scenario(id_, symbol="BTCUSDT", created_at=None, status="pending",
         expected_return_pct=Decimal("0.1"), confidence_score=confidence_score,
         created_at=created_at, expires_at=created_at + timedelta(hours=24),
         status=status, calibrated_confidence=calibrated_confidence,
+        strategy_version=STRATEGY_VERSION,
     )
 
 
@@ -39,6 +41,7 @@ def _closed_position(scenario_id, symbol, closed_at, equity_after):
         opened_at=closed_at - timedelta(hours=1), status="closed",
         closed_at=closed_at, exit_price=Decimal("110"), realized_pnl=equity_after - STARTING_EQUITY,
         equity_before=STARTING_EQUITY, equity_after=equity_after,
+        strategy_version=STRATEGY_VERSION,
     )
 
 
@@ -48,6 +51,7 @@ def _open_position(scenario_id, symbol, opened_at):
         entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
         risk_amount=Decimal("100"), position_size=Decimal("10"),
         opened_at=opened_at, status="open",
+        strategy_version=STRATEGY_VERSION,
     )
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from src.db.models import PaperPosition, Scenario
 from src.paper_equity import current_equity
