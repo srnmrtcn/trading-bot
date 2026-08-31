@@ -10,6 +10,7 @@ from src.backfill import run_gap_backfill
 from src.btc_regime import BTC_SYMBOL, REGIME_TIMEFRAME
 from src.db.models import Symbol
 from src.fetch_log import record_run
+from src.funding_collector import refresh_funding_rates
 from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
 from src.learning_runner import run_learning_cycle
@@ -170,6 +171,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             else:
                 failed += 1
 
+        funding_result = None
         scenario_result = None
         learning_result = None
         paper_result = None
@@ -178,6 +180,15 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 refresh_regime_source(session, binance_client, end)
             except Exception:
                 logger.exception("BTC regime source refresh failed for the %s job", timeframe)
+                session.rollback()
+
+            try:
+                funding_result = refresh_funding_rates(session, binance_client, now=end)
+            except Exception:
+                # Same isolation as the steps below. A funding feed outage must
+                # not stop scenario generation, learning or paper trading - the
+                # gate's own staleness check is what reacts to missing data.
+                logger.exception("Funding rate refresh failed for the %s job", timeframe)
                 session.rollback()
 
             try:
@@ -207,6 +218,9 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
 
         fmt = "%s job finished: %d symbols succeeded, %d failed, %d gaps filled"
         args = [timeframe, succeeded, failed, gaps_filled]
+        if funding_result is not None:
+            fmt += ", %d funding rates updated"
+            args.append(funding_result.updated)
         if scenario_result is not None:
             fmt += ", %d scenarios generated"
             args.append(scenario_result.generated)
@@ -228,8 +242,8 @@ def run_symbol_refresh_job(session_factory, binance_client) -> None:
     try:
         result = refresh_symbols(session, binance_client)
         logger.info(
-            "Symbol refresh finished: %d active, %d deactivated",
-            result.active_count, result.deactivated_count,
+            "Symbol refresh finished: %d active, %d deactivated, %d with futures contracts",
+            result.active_count, result.deactivated_count, result.futures_count,
         )
     except Exception:
         # A failed refresh must not kill the scheduler thread; the job runs

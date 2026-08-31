@@ -41,15 +41,18 @@ def funding_rejection(session, symbol: str, direction: str, now: datetime) -> st
 
     funding_row = session.get(FundingRate, symbol)
     if not funding_row:
-        return "no funding data"
+        return "no funding data yet for a symbol that has a futures contract"
 
     if now - funding_row.fetched_at > FUNDING_DATA_MAX_AGE:
-        return "stale funding data"
+        return "stale funding data: fetched at %s (%s old)" % (
+            funding_row.fetched_at, now - funding_row.fetched_at)
 
     rate = funding_row.funding_rate
     if direction == "long" and rate > FUNDING_RATE_THRESHOLD:
-        return "crowded long"
+        return "funding rate %s is above +%s - longs already crowded" % (
+            rate, FUNDING_RATE_THRESHOLD)
     elif direction == "short" and rate < -FUNDING_RATE_THRESHOLD:
-        return "crowded short"
+        return "funding rate %s is below -%s - shorts already crowded" % (
+            rate, FUNDING_RATE_THRESHOLD)
 
     return None

@@ -55,6 +55,22 @@ Sinyaller yalnızca **kapanmış** mumlar üzerinden değerlendirilir; o an olu�
 pencerede eksik mum) veya anomali işaretli (`flagged`) olan semboller o çalıştırmada
 sessizce atlanır — hata sayılmaz, sonraki saatte tekrar denenir.
 
+## Funding Rate Risk Filtresi
+
+Senaryo üretiminden hemen önce, her saatlik çalıştırmada tüm perpetual futures kontratlarının
+güncel funding rate'i tek bir Binance isteğiyle çekilip `funding_rates` tablosuna yazılır
+(sembol başına tek satır — yalnızca en son değer tutulur, geçmiş saklanmaz).
+
+Bir sinyal üretildiğinde, sembolün USDT-M perpetual futures kontratı varsa funding rate
+kontrol edilir: funding **+%0.05'in üzerindeyse** long sinyalleri, **-%0.05'in altındaysa**
+short sinyalleri reddedilir — bu, sinyalin gitmek istediği yönün zaten aşırı kalabalık ve
+kaldıraçlı olduğu, yani squeeze riskinin yüksek olduğu anlamına gelir. Futures kontratı
+olmayan semboller bu filtreden hiç etkilenmez.
+
+Funding verisi hiç yoksa veya 2 saatten eskiyse, futures kontratı olan semboller için sinyal
+üretilmez ("veri güvenilir değilse işlem yapma"). Hangi sembolde hangi kontratın olduğu,
+günlük sembol yenileme job'ı tarafından `symbols.has_futures_contract` kolonuna yazılır.
+
 ## Öğrenme Döngüsü
 
 Her saatlik işin sonunda, senaryo üretiminin hemen ardından, tüm `pending` senaryolar gerçek

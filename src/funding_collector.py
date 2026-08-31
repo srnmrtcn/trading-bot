@@ -41,10 +41,7 @@ def refresh_funding_rates(session, binance_client, now: datetime = None) -> Fund
     if now is None:
         now = utc_now()
 
-    try:
-        rates = binance_client.get_funding_rates()
-    except Exception:
-        raise
+    rates = binance_client.get_funding_rates()
 
     symbols = session.query(Symbol).filter(Symbol.has_futures_contract == True).all()
     updated = 0
@@ -70,7 +67,7 @@ def refresh_funding_rates(session, binance_client, now: datetime = None) -> Fund
     session.commit()
 
     if not rates:
-        logger.warning("no funding rates")
+        logger.warning("Binance returned no funding rates at all")
 
-    logger.info("funding rates refreshed: updated=%d, missing=%d", updated, missing)
+    logger.info("Funding rates refreshed: %d updated, %d missing from the feed", updated, missing)
     return FundingRefreshResult(updated=updated, missing=missing)
