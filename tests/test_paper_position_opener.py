@@ -4,11 +4,12 @@ from decimal import Decimal
 from src.db.models import PaperPosition, Scenario
 from src.paper_position_opener import open_qualifying_positions
 from src.paper_trading_config import CONFIDENCE_THRESHOLD, RISK_PCT, STARTING_EQUITY
+from src.strategy_version import STRATEGY_VERSION
 
 
 def _pending_scenario(symbol="BTCUSDT", direction="long", calibrated_confidence=Decimal("0.7"),
                        entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
-                       created_at=None):
+                       created_at=None, strategy_version=STRATEGY_VERSION):
     created_at = created_at or datetime(2026, 1, 1)
     return Scenario(
         symbol=symbol, direction=direction,
@@ -16,6 +17,7 @@ def _pending_scenario(symbol="BTCUSDT", direction="long", calibrated_confidence=
         expected_return_pct=Decimal("0.1"), confidence_score=calibrated_confidence,
         created_at=created_at, expires_at=created_at + timedelta(hours=24), status="pending",
         calibrated_confidence=calibrated_confidence,
+        strategy_version=strategy_version,
     )
 
 
@@ -36,6 +38,7 @@ def test_opens_a_position_for_a_qualifying_scenario(db_session):
     expected_risk = STARTING_EQUITY * RISK_PCT
     assert position.risk_amount == expected_risk
     assert position.position_size == expected_risk / Decimal("10")  # |100 - 90|
+    assert position.strategy_version == STRATEGY_VERSION
 
 
 def test_skips_a_scenario_below_the_confidence_threshold(db_session):
@@ -157,6 +160,7 @@ def test_a_wiped_out_portfolio_stops_opening_instead_of_failing_per_candidate(db
         expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
         created_at=datetime(2025, 1, 1), expires_at=datetime(2025, 1, 2),
         status="hit_stop", calibrated_confidence=Decimal("0.7"),
+        strategy_version=STRATEGY_VERSION,
     )
     db_session.add(dead)
     db_session.commit()
@@ -179,3 +183,27 @@ def test_a_wiped_out_portfolio_stops_opening_instead_of_failing_per_candidate(db
     assert result.failed == 0, "a dead portfolio is not three separate failures"
     assert db_session.query(PaperPosition).filter(PaperPosition.status == "open").count() == 0
     assert len([r for r in caplog.records if r.levelno >= logging.ERROR]) == 1
+
+
+def test_skips_scenarios_with_different_strategy_version(db_session):
+    scenario = _pending_scenario(strategy_version="2025.01.old-version")
+    db_session.add(scenario)
+    db_session.commit()
+
+    result = open_qualifying_positions(db_session)
+
+    assert result.scanned == 0
+    assert db_session.query(PaperPosition).count() == 0
+
+
+def test_opens_position_with_explicit_strategy_version(db_session):
+    scenario = _pending_scenario(strategy_version=STRATEGY_VERSION)
+    db_session.add(scenario)
+    db_session.commit()
+
+    result = open_qualifying_positions(db_session, now=datetime(2026, 1, 1, 5))
+
+    assert result.scanned == 1
+    assert result.opened == 1
+    position = db_session.query(PaperPosition).first()
+    assert position.strategy_version == STRATEGY_VERSION

@@ -8,6 +8,7 @@ from src.db.models import PaperPosition, Scenario
 from src.paper_equity import current_equity
 from src.paper_sizer import size_position
 from src.paper_trading_config import CONFIDENCE_THRESHOLD, MAX_CONCURRENT_POSITIONS, RISK_PCT
+from src.strategy_version import STRATEGY_VERSION
 from src.timeutil import utc_now
 
 logger = logging.getLogger("paper_position_opener")
@@ -32,6 +33,7 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
             Scenario.expires_at > now,
             Scenario.calibrated_confidence.isnot(None),
             Scenario.calibrated_confidence >= CONFIDENCE_THRESHOLD,
+            Scenario.strategy_version == STRATEGY_VERSION,
         )
         .order_by(Scenario.created_at.asc())
         .all()
@@ -81,6 +83,7 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
                 entry_price=scenario.entry_price, stop_price=scenario.stop_price, target_price=scenario.target_price,
                 risk_amount=risk_amount, position_size=position_size,
                 opened_at=now, status="open",
+                strategy_version=STRATEGY_VERSION,
             ))
             session.commit()
             open_symbols.add(symbol)
