@@ -7,8 +7,9 @@ from decimal import Decimal
 
 from src.db.models import Kline, PaperPosition, Scenario
 from src.paper_equity import current_equity
-from src.paper_trading_config import TAKER_FEE_RATE
 from src.timeutil import utc_now
+from src.trading_costs import round_trip_cost, funding_cost
+from src.funding_collector import funding_events_between
 
 logger = logging.getLogger("paper_position_closer")
 
@@ -59,19 +60,6 @@ def _count_stuck_positions(session, now: datetime) -> int:
         )
         .count()
     )
-
-
-def _fees(position_size: Decimal, entry_price: Decimal, exit_price: Decimal) -> Decimal:
-    """Taker fees for both legs, each on the notional actually transacted."""
-    return position_size * (entry_price + exit_price) * TAKER_FEE_RATE
-
-
-def _realized_pnl(direction: str, position_size: Decimal, entry_price: Decimal, exit_price: Decimal) -> Decimal:
-    if direction == "long":
-        gross = position_size * (exit_price - entry_price)
-    else:
-        gross = position_size * (entry_price - exit_price)
-    return gross - _fees(position_size, entry_price, exit_price)
 
 
 def close_resolved_positions(session, now: datetime = None) -> PositionCloseResult:
@@ -142,7 +130,22 @@ def close_resolved_positions(session, now: datetime = None) -> PositionCloseResu
                 continue
 
             equity_before = current_equity(session)
-            realized_pnl = _realized_pnl(position.direction, position.position_size, position.entry_price, exit_price)
+            
+            # Calculate realized PnL using the new formula:
+            # realized_pnl = gross directional PnL - round_trip_cost - funding_cost
+            if position.direction == "long":
+                gross = position.position_size * (exit_price - position.entry_price)
+            else:
+                gross = position.position_size * (position.entry_price - exit_price)
+            
+            round_trip = round_trip_cost(position.position_size, position.entry_price, exit_price)
+            
+            # Use the exact chosen close timestamp as the funding window end
+            funding_events = funding_events_between(session, symbol, position.opened_at, now)
+            funding = funding_cost(position.direction, position.position_size, funding_events)
+            
+            realized_pnl = gross - round_trip - funding
+            
             position.exit_price = exit_price
             position.realized_pnl = realized_pnl
             position.equity_before = equity_before
