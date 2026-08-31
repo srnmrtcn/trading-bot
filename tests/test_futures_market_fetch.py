@@ -26,7 +26,8 @@ class SahteBinanceClient:
 
     def get_futures_klines(self, symbol, timeframe, start_ms, end_ms):
         self.get_futures_klines_call_count += 1
-        return [_mum(datetime(2026, 1, 1, 0))]
+        # Iki mum: test 3 futures yolunun ikisini de yazdigini dogruluyor.
+        return [_mum(datetime(2026, 1, 1, 0)), _mum(datetime(2026, 1, 1, 1))]
 
 
 def test_1_varsayilan_spot_fetch_and_store(db_session):
