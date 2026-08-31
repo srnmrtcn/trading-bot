@@ -8,6 +8,7 @@ from src.confidence_calibrator import compute_success_rates, confidence_bucket
 from src.db.models import Kline, Scenario
 from src.integrity import TIMEFRAME_DELTAS, floor_to_timeframe
 from src.outcome_evaluator import evaluate_outcome
+from src.strategy_version import STRATEGY_VERSION
 from src.timeutil import utc_now
 
 logger = logging.getLogger("learning_runner")
@@ -182,7 +183,12 @@ class CalibrationResult:
 def calibrate_scenarios(session) -> CalibrationResult:
     resolved_records = [
         (row.direction, row.confidence_score, row.status)
-        for row in session.query(Scenario).filter(Scenario.status != "pending").all()
+        for row in session.query(Scenario)
+        .filter(
+            Scenario.strategy_version == STRATEGY_VERSION,
+            Scenario.status.notin_(("pending", "unresolvable")),
+        )
+        .all()
     ]
     rates = compute_success_rates(resolved_records)
     patterns_with_data = sum(1 for rate, _count in rates.values() if rate is not None)
@@ -191,7 +197,11 @@ def calibrate_scenarios(session) -> CalibrationResult:
     # pool above; scoring it would be post-hoc.
     targets = (
         session.query(Scenario)
-        .filter(Scenario.calibrated_confidence.is_(None), Scenario.status == "pending")
+        .filter(
+            Scenario.calibrated_confidence.is_(None),
+            Scenario.status == "pending",
+            Scenario.strategy_version == STRATEGY_VERSION,
+        )
         .all()
     )
     scenarios_updated = 0
@@ -200,10 +210,6 @@ def calibrate_scenarios(session) -> CalibrationResult:
         rate, _count = rates.get(key, (None, 0))
         if rate is not None:
             scenario.calibrated_confidence = rate
-            scenarios_updated += 1
-        else:
-            # If rate is None, keep the original confidence score
-            scenario.calibrated_confidence = scenario.confidence_score
             scenarios_updated += 1
     session.commit()
 
