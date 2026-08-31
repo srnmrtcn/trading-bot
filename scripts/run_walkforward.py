@@ -13,7 +13,7 @@ the split is noise, however good it looks.
 from __future__ import annotations
 
 import argparse
-import statistics
+import random
 import sys
 import time
 from datetime import timedelta
@@ -74,29 +74,66 @@ def score(drafts, min_stop_pct, min_rr, start_after=None, until=None):
         if outcome is None:
             continue
         risk = abs(draft.entry_price - draft.stop_price)
-        results.append(float(outcome.r_multiple - fee_cost_in_r(
+        net_r = float(outcome.r_multiple - fee_cost_in_r(
             draft.entry_price, outcome.exit_price, risk, TAKER_FEE_RATE,
-        )))
+        ))
+        results.append((now, net_r))
     return results
 
 
 def summarise(results):
-    """(n, mean R, half-width of the 95% interval). Half-width is None below
-    two trades, where a spread is undefined."""
+    """(n, mean R, low of the 95% interval, high of the 95% interval).
+    
+    If n < 2, returns (n, mean R, None, None)"""
     n = len(results)
     if n == 0:
-        return 0, None, None
-    mean = statistics.mean(results)
-    if n < 2:
-        return n, mean, None
-    return n, mean, 1.96 * statistics.stdev(results) / (n ** 0.5)
+        return 0, None, None, None
+    if n == 1:
+        return 1, results[0][1], None, None
+    
+    # Calculate bootstrap interval
+    net_r_values = [r for _, r in results]
+    mean_val = sum(net_r_values) / len(net_r_values)
+    low, high = bootstrap_interval(results)
+    
+    if low is None:
+        return n, mean_val, None, None
+    return n, mean_val, low, high
 
 
 def bootstrap_interval(samples, iterations=1000, seed=0):
     """
     samples: (now, net_r) ikilileri listesi. Saat-bloklu bootstrap ile (%2.5, %97.5) ikilisi dondurur; ikisi de float.
     """
-    raise NotImplementedError
+    if len(samples) < 2:
+        return (None, None)
+    
+    # Group by hour
+    blocks = {}
+    for now, net_r in samples:
+        hour_key = now.replace(minute=0, second=0, microsecond=0)
+        if hour_key not in blocks:
+            blocks[hour_key] = []
+        blocks[hour_key].append(net_r)
+    
+    block_list = list(blocks.values())
+    random_generator = random.Random(seed)
+    
+    bootstrap_means = []
+    for _ in range(iterations):
+        # Sample blocks with replacement
+        sampled_blocks = [random_generator.choice(block_list) for _ in range(len(block_list))]
+        # Flatten the sampled blocks into a single pool
+        pool = [r for block in sampled_blocks for r in block]
+        # Calculate mean of this bootstrap sample
+        bootstrap_means.append(sum(pool) / len(pool))
+    
+    # Sort means and get percentiles
+    bootstrap_means.sort()
+    lower_idx = int(0.025 * iterations)
+    upper_idx = min(int(0.975 * iterations), iterations - 1)
+    
+    return (bootstrap_means[lower_idx], bootstrap_means[upper_idx])
 
 
 def main(argv=None) -> int:
@@ -152,16 +189,15 @@ def main(argv=None) -> int:
 
             train_exp, stop, rr, train_n = best
             # The only time this configuration meets the test period.
-            test_n, test_exp, half = summarise(score(drafts, stop, rr, start_after=boundary))
+            test_n, test_exp, test_lo, test_hi = summarise(score(drafts, stop, rr, start_after=boundary))
             label = f"stop>={stop} rr>={rr}"
             if test_n == 0:
                 verdict = "n=0"
-            elif half is None:
+            elif test_lo is None:
                 verdict = f"{test_exp:+.3f}"
             else:
-                low, high = test_exp - half, test_exp + half
-                sign = "ZARARDA" if high < 0 else ("KARDA" if low > 0 else "sifirdan ayirt edilemez")
-                verdict = f"{test_exp:+.3f} [{low:+.3f},{high:+.3f}] {sign}"
+                sign = "ZARARDA" if test_hi < 0 else ("KARDA" if test_lo > 0 else "sifirdan ayirt edilemez")
+                verdict = f"{test_exp:+.3f} [{test_lo:+.3f},{test_hi:+.3f}] {sign}"
             print(f"{rule:<9} {label:<22} {train_n:>8} {train_exp:>12.3f} {test_n:>7}  {verdict}"
                   f"   ({eligible} hucre denendi)", flush=True)
     finally:
