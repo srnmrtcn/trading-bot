@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.db.models import PaperPosition, Scenario
 from src.paper_equity import current_equity
 from src.paper_sizer import size_position
-from src.paper_trading_config import CONFIDENCE_THRESHOLD, MAX_CONCURRENT_POSITIONS, RISK_PCT
+from src.paper_trading_config import (
+    MAX_CONCURRENT_POSITIONS,
+    RISK_PCT,
+    MIN_EXPECTED_R,
+    MAX_TOTAL_NOTIONAL_MULTIPLE,
+)
 from src.strategy_version import STRATEGY_VERSION
 from src.timeutil import utc_now
+from src.trading_costs import fee_and_slippage_cost_in_r
 
 logger = logging.getLogger("paper_position_opener")
 
@@ -22,6 +28,9 @@ class PositionOpenResult:
     failed: int
 
 
+MAX_SCENARIO_AGE = timedelta(hours=1)
+
+
 def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResult:
     now = now if now is not None else utc_now()
 
@@ -32,8 +41,8 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
             Scenario.status == "pending",
             Scenario.expires_at > now,
             Scenario.calibrated_confidence.isnot(None),
-            Scenario.calibrated_confidence >= CONFIDENCE_THRESHOLD,
             Scenario.strategy_version == STRATEGY_VERSION,
+            Scenario.created_at > now - MAX_SCENARIO_AGE,
         )
         .order_by(Scenario.created_at.asc())
         .all()
@@ -57,6 +66,12 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
     opened = 0
     skipped = 0
     failed = 0
+    
+    # Calculate total notional of currently open positions
+    total_notional = Decimal("0")
+    for position in session.query(PaperPosition).filter(PaperPosition.status == "open").all():
+        total_notional += position.position_size * position.entry_price
+
     for scenario in candidates:
         scanned += 1
         scenario_id = scenario.id
@@ -78,6 +93,31 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
                 current_equity(session), scenario.entry_price, scenario.stop_price, RISK_PCT,
             )
 
+            # Calculate expected return for this scenario
+            risk = abs(scenario.entry_price - scenario.stop_price)
+            if risk == Decimal("0"):
+                logger.debug("Skipping scenario %s (%s): zero risk", scenario_id, symbol)
+                skipped += 1
+                continue
+
+            rr = abs(scenario.target_price - scenario.entry_price) / risk
+            p = scenario.calibrated_confidence
+            fee_cost = fee_and_slippage_cost_in_r(scenario.entry_price, scenario.stop_price)
+            expected_r = p * rr - (Decimal("1") - p) - fee_cost
+
+            if expected_r <= MIN_EXPECTED_R:
+                logger.debug("Skipping scenario %s (%s): expected return %.4f <= minimum %.4f", 
+                           scenario_id, symbol, expected_r, MIN_EXPECTED_R)
+                skipped += 1
+                continue
+
+            # Check if adding this position would exceed the maximum total notional
+            new_notional = position_size * scenario.entry_price
+            if total_notional + new_notional > MAX_TOTAL_NOTIONAL_MULTIPLE * equity:
+                logger.debug("Skipping scenario %s (%s): total notional would exceed limit", scenario_id, symbol)
+                skipped += 1
+                continue
+
             session.add(PaperPosition(
                 scenario_id=scenario.id, symbol=symbol, direction=scenario.direction,
                 entry_price=scenario.entry_price, stop_price=scenario.stop_price, target_price=scenario.target_price,
@@ -89,6 +129,10 @@ def open_qualifying_positions(session, now: datetime = None) -> PositionOpenResu
             open_symbols.add(symbol)
             open_count += 1
             opened += 1
+            
+            # Update total notional after successfully opening a position
+            total_notional += new_notional
+            
         except Exception:
             session.rollback()
             logger.exception("Opening paper position for scenario %s (%s) failed", scenario_id, symbol)
