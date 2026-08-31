@@ -16,9 +16,13 @@ REQUEST_TIMEOUT_SECONDS = 10
 
 class BinanceClient:
     def __init__(self, client=None, backoff: RateLimitBackoff = None):
+        # ping=False: the library pings the API inside __init__ by default,
+        # and that call runs before any of main.startup's error handling —
+        # a Binance outage at boot would otherwise crash-loop the service.
         self._client = client or Client(
             api_key="", api_secret="",
             requests_params={"timeout": REQUEST_TIMEOUT_SECONDS},
+            ping=False,
         )
         self._backoff = backoff or RateLimitBackoff()
 
