@@ -7,7 +7,10 @@ from src.db.models import Kline, Scenario
 from src.learning_runner import calibrate_scenarios, resolve_pending_scenarios
 
 
-def _pending_scenario(symbol="BTCUSDT", direction="long", created_at=None, expires_at=None):
+STRATEGY_VERSION = "2026.09.futures-v1"
+
+
+def _pending_scenario(symbol="BTCUSDT", direction="long", created_at=None, expires_at=None, strategy_version=STRATEGY_VERSION):
     created_at = created_at or datetime(2026, 1, 1, 10, 5, 0)
     expires_at = expires_at or created_at + timedelta(hours=24)
     return Scenario(
@@ -15,6 +18,7 @@ def _pending_scenario(symbol="BTCUSDT", direction="long", created_at=None, expir
         entry_price=Decimal("100"), target_price=Decimal("110"), stop_price=Decimal("90"),
         expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.6"),
         created_at=created_at, expires_at=expires_at, status="pending",
+        strategy_version=strategy_version,
     )
 
 
@@ -322,6 +326,7 @@ def _resolved_scenario(symbol, direction, confidence_score, status):
         created_at=now, expires_at=now + timedelta(hours=24),
         status=status, resolved_at=now + timedelta(hours=3),
         calibrated_confidence=confidence_score,  # already calibrated when it was created
+        strategy_version=STRATEGY_VERSION,
     )
 
 
