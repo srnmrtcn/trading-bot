@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -419,3 +420,28 @@ def test_process_symbol_scenario_ignores_funding_for_a_symbol_without_futures(db
     db_session.commit()
 
     assert process_symbol_scenario(db_session, "BTCUSDT", regime="up", now=NOW) == "generated"
+
+
+def test_process_symbol_scenario_logs_when_stop_geometry_is_rejected(
+    db_session, monkeypatch, caplog,
+):
+    import src.scenario_runner as scenario_runner_module
+
+    _seed_signal_klines(db_session, symbol="BTCUSDT")
+    monkeypatch.setattr(
+        scenario_runner_module,
+        "build_scenario",
+        lambda symbol, signal, klines, now: None,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="scenario_runner"):
+        outcome = process_symbol_scenario(
+            db_session, "BTCUSDT", regime="up", now=NOW,
+        )
+
+    assert outcome == "skipped"
+    assert any(
+        "BTCUSDT" in record.getMessage()
+        and "stop_too_tight" in record.getMessage()
+        for record in caplog.records
+    )
