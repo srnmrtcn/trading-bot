@@ -192,7 +192,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 session.rollback()
 
             try:
-                scenario_result = run_scenario_generation(session, symbols)
+                scenario_result = run_scenario_generation(session, symbols, now=end)
             except Exception:
                 # Scenario generation isolates its own per-symbol failures, but
                 # a raise from the call itself (or from its rollback) would
