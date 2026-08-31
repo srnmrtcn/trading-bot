@@ -176,7 +176,7 @@ def main(argv=None) -> int:
             best, eligible = None, 0
             for stop in MIN_STOP_PCTS:
                 for rr in MIN_RRS:
-                    n, expectancy, _ = summarise(score(drafts, stop, rr, until=boundary))
+                    n, expectancy, _lo, _hi = summarise(score(drafts, stop, rr, until=boundary))
                     if n < MIN_TRAIN_TRADES:
                         continue
                     eligible += 1
