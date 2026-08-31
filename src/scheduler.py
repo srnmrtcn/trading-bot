@@ -192,6 +192,14 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 session.rollback()
 
             try:
+                from src.funding_collector import refresh_funding_history
+                refresh_funding_history(session, binance_client, now=end)
+            except Exception:
+                # Isolate this step like others: log and continue.
+                logger.exception("Funding history refresh failed for the %s job", timeframe)
+                session.rollback()
+
+            try:
                 scenario_result = run_scenario_generation(session, symbols, now=end)
             except Exception:
                 # Scenario generation isolates its own per-symbol failures, but
