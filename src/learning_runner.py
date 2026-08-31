@@ -170,7 +170,13 @@ def calibrate_scenarios(session) -> CalibrationResult:
     rates = compute_success_rates(resolved_records)
     patterns_with_data = sum(1 for rate, _count in rates.values() if rate is not None)
 
-    targets = session.query(Scenario).filter(Scenario.calibrated_confidence.is_(None)).all()
+    # Only pending rows are predictions. A resolved row is already in the
+    # pool above; scoring it would be post-hoc.
+    targets = (
+        session.query(Scenario)
+        .filter(Scenario.calibrated_confidence.is_(None), Scenario.status == "pending")
+        .all()
+    )
     scenarios_updated = 0
     for scenario in targets:
         key = (scenario.direction, confidence_bucket(scenario.confidence_score))
