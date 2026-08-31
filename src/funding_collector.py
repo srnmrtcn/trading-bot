@@ -71,3 +71,18 @@ def refresh_funding_rates(session, binance_client, now: datetime = None) -> Fund
 
     logger.info("Funding rates refreshed: %d updated, %d missing from the feed", updated, missing)
     return FundingRefreshResult(updated=updated, missing=missing)
+
+
+def record_funding_event(session, symbol: str, funding_time: datetime, funding_rate: Decimal, mark_price: Decimal) -> bool:
+    """Ayni (symbol, funding_time) icin FundingRateHistory satiri zaten varsa hicbir sey yapmaz ve False doner. Yoksa satiri session'a EKLER ve True doner. COMMIT ETMEZ - cagiran topluca commit eder."""
+    raise NotImplementedError
+
+
+def funding_events_between(session, symbol: str, start: datetime, end: datetime) -> list:
+    """Verilen sembol icin start < funding_time <= end araligindaki FundingRateHistory satirlarini funding_time'a gore ARTAN sirada dondurur; her eleman (funding_time, funding_rate, mark_price) uclusu. Sinirlar bilincli asimetrik: acilis anindaki olay o pozisyonun degil, kapanis anindaki olay onundur. Kayit yoksa bos liste. Baska sembolun satirlari sayilmaz. Yalnizca okur."""
+    raise NotImplementedError
+
+
+def refresh_funding_history(session, binance_client, now: datetime = None) -> int:
+    """now verilmezse utc_now(). binance_client.get_funding_events() cagrilir; donen sozluk {symbol: (funding_time, funding_rate, mark_price)}. Symbol tablosunda has_futures_contract == True olan her sembol icin feed'deki kayit record_funding_event ile yazilir. Feed'de olmayan sembol atlanir. funding_time ya da mark_price None olan kayit atlanir. Sonda session.commit(); YENI yazilan satir sayisi doner. Hatalar YUKARI YAYILIR - cagiran saatlik job kendi try/except'i ile izole eder."""
+    raise NotImplementedError
