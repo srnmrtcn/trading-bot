@@ -20,8 +20,10 @@ def size_position(equity: Decimal, entry_price: Decimal, stop_price: Decimal, ri
         # from there `_realized_pnl` books every win as a loss.
         raise ValueError("cannot size a position against non-positive equity")
 
-    risk_amount = equity * risk_pct
-    position_size = risk_amount / abs(entry_price - stop_price)
-
+    target_risk = equity * risk_pct
+    stop_distance = abs(entry_price - stop_price)
+    requested_size = target_risk / stop_distance
     max_position_size = equity * MAX_LEVERAGE / entry_price
-    return risk_amount, min(position_size, max_position_size)
+    position_size = min(requested_size, max_position_size)
+    risk_amount = position_size * stop_distance
+    return risk_amount, position_size
