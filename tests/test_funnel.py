@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from src.research.funnel import (
+    MIN_STOP_PCT as REPLAY_MIN_STOP_PCT,
     analyze_symbol,
     backtest_symbol,
     fee_cost_in_r,
@@ -12,7 +13,7 @@ from src.research.funnel import (
     passes_risk_filters,
     resolve_draft,
 )
-from src.scenario_builder import ScenarioDraft
+from src.scenario_builder import MIN_STOP_PCT as PRODUCTION_MIN_STOP_PCT, ScenarioDraft
 from src.indicators import compute_rsi
 from src.research.funnel import _rsi_for_window, _rule_signal
 from src.scenario_runner import SCENARIO_LOOKBACK
@@ -39,6 +40,10 @@ def _series(closes: list, volumes: list = None, start: datetime = None) -> list:
             "flagged": False,
         })
     return rows
+
+
+def test_replay_reexports_the_production_minimum_stop_threshold():
+    assert REPLAY_MIN_STOP_PCT is PRODUCTION_MIN_STOP_PCT
 
 
 def test_series_shorter_than_the_window_yields_no_evaluations():
