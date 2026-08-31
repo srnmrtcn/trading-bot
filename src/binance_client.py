@@ -83,6 +83,50 @@ class BinanceClient:
             results[entry["symbol"]] = Decimal(str(rate))
         return results
 
+    def get_funding_events(self) -> dict:
+        """Her futures sembolu icin funding event bilgisi, TEK istekte.
+
+        ADIMLAR:
+          1. self._backoff.call(self._client.futures_mark_price) cagir -
+             PARAMETRESIZ. Parametresiz cagrilinca tum tahtayi (~875 kayit)
+             tek listede donduruyor, sembol basina ayri istek YOK.
+          2. Bos bir sozluk ac. Donen her kayit icin:
+             - entry.get("symbol") oku; alan yoksa ya da bos string ise o kaydi ATLA
+             - entry.get("nextFundingTime") oku; alan yoksa ya da bos string ise o kaydi ATLA
+             - entry.get("lastFundingRate") oku; alan yoksa ya da bos string ise o kaydi ATLA
+             - entry.get("markPrice") oku; alan yoksa ya da bos string ise o kaydi ATLA
+             - nextFundingTime_ms = int(entry["nextFundingTime"]) donusumunden sonra
+               datetime.utcfromtimestamp(nextFundingTime_ms/1000) ile naive utc datetime olustur
+             - Decimal(str(lastFundingRate)) ve Decimal(str(markPrice)) donusumu yap
+             - results[entry["symbol"]] = (naive_utc_datetime, Decimal(lastFundingRate), Decimal(markPrice))
+          3. Sozlugu don.
+        """
+        mark_price = self._backoff.call(self._client.futures_mark_price)
+        results = {}
+        for entry in mark_price:
+            symbol = entry.get("symbol")
+            if not symbol:
+                continue
+            next_funding_time = entry.get("nextFundingTime")
+            if not next_funding_time:
+                continue
+            last_funding_rate = entry.get("lastFundingRate")
+            if not last_funding_rate:
+                continue
+            mark_price_value = entry.get("markPrice")
+            if not mark_price_value:
+                continue
+            
+            next_funding_time_ms = int(next_funding_time)
+            funding_time = datetime.utcfromtimestamp(next_funding_time_ms/1000).replace(tzinfo=None)
+            
+            results[symbol] = (
+                funding_time,
+                Decimal(str(last_funding_rate)),
+                Decimal(str(mark_price_value))
+            )
+        return results
+
     def get_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list:
         all_rows = []
         cursor = start_ms

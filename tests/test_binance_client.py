@@ -120,3 +120,47 @@ def test_get_funding_rates_skips_entries_without_a_funding_rate():
     client = BinanceClient(client=fake)
 
     assert client.get_funding_rates() == {"BTCUSDT": Decimal("0.00005955")}
+
+
+def test_get_funding_events_returns_datetime_and_decimals_keyed_by_symbol():
+    fake = _FakeClient(mark_price=[
+        {"symbol": "BTCUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},
+        {"symbol": "ETHUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "-0.00012000", "markPrice": "3000.00"},
+    ])
+    client = BinanceClient(client=fake)
+
+    events = client.get_funding_events()
+
+    assert events == {
+        "BTCUSDT": (
+            datetime(2025, 1, 1, 0, 0, 0),
+            Decimal("0.00005955"),
+            Decimal("79636.12")
+        ),
+        "ETHUSDT": (
+            datetime(2025, 1, 1, 0, 0, 0),
+            Decimal("-0.00012000"),
+            Decimal("3000.00")
+        )
+    }
+    # Parsed via str(), never float, so the stored rate is exact.
+    assert isinstance(events["BTCUSDT"][1], Decimal)
+    assert isinstance(events["BTCUSDT"][2], Decimal)
+
+
+def test_get_funding_events_skips_entries_without_required_fields():
+    fake = _FakeClient(mark_price=[
+        {"symbol": "BTCUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},
+        {"symbol": "WEIRDUSDT", "markPrice": "1.0"},  # missing nextFundingTime and lastFundingRate
+        {"symbol": "EMPTYUSDT", "nextFundingTime": "", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},  # empty nextFundingTime
+        {"symbol": "", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},  # empty symbol
+    ])
+    client = BinanceClient(client=fake)
+
+    assert client.get_funding_events() == {
+        "BTCUSDT": (
+            datetime(2025, 1, 1, 0, 0, 0),
+            Decimal("0.00005955"),
+            Decimal("79636.12")
+        )
+    }
