@@ -1,8 +1,17 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.scenario_builder import build_scenario, MIN_EXPIRY_HOURS, MAX_EXPIRY_HOURS
+import pytest
+
+import src.scenario_builder as scenario_builder_module
+from src.scenario_builder import (
+    MAX_EXPIRY_HOURS,
+    MIN_EXPIRY_HOURS,
+    MIN_STOP_PCT,
+    build_scenario,
+)
 from src.scenario_signal import SignalResult
+from src.support_resistance import SwingPoint
 
 
 def _kline(hour, high, low, close=None):
@@ -66,3 +75,41 @@ def test_build_scenario_returns_none_when_no_resistance_above_entry():
     now = datetime(2026, 1, 2)
 
     assert build_scenario("BTCUSDT", signal, klines, now) is None
+
+
+def _build_with_stop(monkeypatch, stop_price):
+    now = datetime(2026, 1, 2)
+    monkeypatch.setattr(
+        scenario_builder_module,
+        "find_swing_points",
+        lambda klines, k: (
+            [SwingPoint(open_time=now, price=Decimal("110"))],
+            [SwingPoint(open_time=now, price=stop_price)],
+        ),
+    )
+    signal = SignalResult(
+        direction="long",
+        entry_price=Decimal("100"),
+        rsi=Decimal("35"),
+        previous_rsi=Decimal("25"),
+    )
+    return build_scenario("BTCUSDT", signal, _klines_with_swings(), now)
+
+
+def test_min_stop_pct_is_the_shared_production_strategy_parameter():
+    assert MIN_STOP_PCT == Decimal("0.005")
+
+
+@pytest.mark.parametrize(
+    ("stop_price", "accepted"),
+    [
+        (Decimal("99.6"), False),
+        (Decimal("99.5"), True),
+        (Decimal("99"), True),
+    ],
+)
+def test_build_scenario_rejects_only_stops_narrower_than_the_minimum(
+    monkeypatch, stop_price, accepted,
+):
+    draft = _build_with_stop(monkeypatch, stop_price)
+    assert (draft is not None) is accepted
