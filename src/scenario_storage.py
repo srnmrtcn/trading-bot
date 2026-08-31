@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.db.models import Scenario
+from src.strategy_version import STRATEGY_VERSION
 
 
 def has_pending_scenario(session, symbol: str, direction: str, now: datetime) -> bool:
@@ -41,5 +42,6 @@ def insert_scenario(session, draft) -> None:
         created_at=draft.created_at,
         expires_at=draft.expires_at,
         status="pending",
+        strategy_version=STRATEGY_VERSION,
     ))
     session.commit()

@@ -4,6 +4,7 @@ from decimal import Decimal
 from src.db.models import Scenario
 from src.scenario_builder import ScenarioDraft
 from src.scenario_storage import has_pending_scenario, insert_scenario
+from src.strategy_version import STRATEGY_VERSION
 
 
 def _add_pending(db_session, symbol, direction, created_at, expires_at):
@@ -61,3 +62,4 @@ def test_insert_scenario_persists_a_pending_row(db_session):
     assert row is not None
     assert row.status == "pending"
     assert row.direction == "short"
+    assert row.strategy_version == STRATEGY_VERSION
