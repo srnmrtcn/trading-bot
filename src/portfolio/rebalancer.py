@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from dataclasses import dataclass
+from decimal import Decimal
 
 from src.db.models import Kline, PortfolioSnapshot
 from src.integrity import floor_to_timeframe
 from src.portfolio.config import REBALANCE_DAYS, STRATEGY_VERSION
+from src.funding_collector import funding_events_between
+from src.portfolio.accounting import position_sizes
+from src.portfolio.book import close_position, open_positions, portfolio_equity, record_open
+from src.portfolio.config import (
+    LEG_EXPOSURE,
+    LIQUIDITY_WINDOW_DAYS,
+    LOOKBACK_DAYS,
+    MIN_DOLLAR_VOLUME,
+    MIN_UNIVERSE,
+    SIGNAL_SKIP_DAYS,
+    TOP_FRACTION,
+)
+from src.portfolio.selection import book_for, closes_by_day
+from src.timeutil import utc_now
 
 
 def is_rebalance_due(session, now: datetime) -> bool:
@@ -56,3 +72,19 @@ def record_snapshot(session, as_of: datetime, equity, closed: int, opened: int):
     session.add(snapshot)
     session.commit()
     return snapshot
+
+
+@dataclass
+class RebalanceResult:
+    acted: bool
+    closed: int
+    opened: int
+    equity: Decimal
+    universe: int
+
+
+def run_rebalance(session, now: datetime = None) -> RebalanceResult:
+    """
+    Executes a rebalance operation, closing existing positions and opening new ones.
+    """
+    raise NotImplementedError
