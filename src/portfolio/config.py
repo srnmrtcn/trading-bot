@@ -43,3 +43,8 @@ LEG_EXPOSURE = Decimal("1")
 MIN_UNIVERSE = 15
 
 STARTING_EQUITY = Decimal("10000")
+
+# How many days of daily perpetual candles to keep refreshed. The book needs
+# the liquidity window plus the longest lookback plus the signal skip, and a
+# couple of days of slack so a late or missed run does not starve the ranking.
+DAILY_HISTORY_DAYS = LIQUIDITY_WINDOW_DAYS + max(LOOKBACK_DAYS) + SIGNAL_SKIP_DAYS + 5

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.db.models import Kline
+from src.db.models import FuturesDailyKline
 from src.portfolio.book import portfolio_equity
 from src.portfolio.config import REBALANCE_DAYS, STRATEGY_VERSION
 from src.portfolio.rebalancer import is_rebalance_due, load_daily_bars, record_snapshot
@@ -13,9 +13,9 @@ NOW = BASLANGIC + timedelta(days=70)
 def _ekle(session, sembol, gun_sayisi, dolar=Decimal(60000000)):
     price = Decimal(100)
     for i in range(gun_sayisi):
-        session.add(Kline(symbol=sembol, timeframe='1d', open_time=BASLANGIC + timedelta(days=i),
-                          open=price, high=price, low=price, close=price,
-                          volume=dolar / price, flagged=False))
+        session.add(FuturesDailyKline(symbol=sembol,
+                                      open_time=BASLANGIC + timedelta(days=i),
+                                      close=price, volume=dolar / price))
 
 
 def test_is_rebalance_due_no_snapshot(db_session):

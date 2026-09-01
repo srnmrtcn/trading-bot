@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from decimal import Decimal
 
-from src.db.models import Kline, PortfolioSnapshot
+from src.db.models import FuturesDailyKline, PortfolioSnapshot
 from src.integrity import floor_to_timeframe
 from src.portfolio.config import REBALANCE_DAYS, STRATEGY_VERSION
 from src.funding_collector import funding_events_between
@@ -44,13 +44,12 @@ def load_daily_bars(session, now: datetime, days: int) -> dict:
     """
     boundary = floor_to_timeframe(now, "1d")
     rows = (
-        session.query(Kline)
+        session.query(FuturesDailyKline)
         .filter(
-            Kline.timeframe == "1d",
-            Kline.open_time < boundary,
-            Kline.open_time >= boundary - timedelta(days=days),
+            FuturesDailyKline.open_time < boundary,
+            FuturesDailyKline.open_time >= boundary - timedelta(days=days),
         )
-        .order_by(Kline.symbol.asc(), Kline.open_time.asc())
+        .order_by(FuturesDailyKline.symbol.asc(), FuturesDailyKline.open_time.asc())
         .all()
     )
     bars = {}

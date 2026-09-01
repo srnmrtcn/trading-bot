@@ -174,3 +174,34 @@ class PortfolioSnapshot(Base):
     equity = Column(Numeric(20, 8), nullable=False)
     positions_closed = Column(Integer, nullable=False, default=0)
     positions_opened = Column(Integer, nullable=False, default=0)
+
+
+class FuturesDailyKline(Base):
+    __tablename__ = "futures_daily_klines"
+    __table_args__ = (
+        UniqueConstraint("symbol", "open_time", name="uq_futures_daily_symbol_open_time"),
+    )
+
+    # A second candle table, which needs justifying.
+    #
+    # `klines` holds SPOT candles and its unique key is (symbol, timeframe,
+    # open_time) -- no room for a market. The momentum book trades perpetuals
+    # and its liquidity floor was calibrated on PERPETUAL dollar volume, which
+    # for many pairs is a multiple of the spot figure and for others a
+    # fraction; ranking on spot would quietly select a different universe than
+    # the one that was measured. Adding a `market` column would mean altering
+    # that unique constraint on a live Postgres with millions of rows, and
+    # sync_missing_columns only ever ADDs nullable columns. Encoding the market
+    # in the timeframe string ("1d-fut") would spread a lie through
+    # TIMEFRAME_DELTAS, gap repair and floor_to_timeframe, all of which read a
+    # timeframe as a duration.
+    #
+    # Close and volume only. This table exists to rank symbols and to measure a
+    # volume floor; the strategy has no stops and no targets, so it never asks
+    # what happened inside a day. A half-filled OHLC row would look like a
+    # candle store and invite someone to use it as one.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String, nullable=False, index=True)
+    open_time = Column(DateTime, nullable=False)
+    close = Column(Numeric(20, 8), nullable=False)
+    volume = Column(Numeric(30, 8), nullable=False)

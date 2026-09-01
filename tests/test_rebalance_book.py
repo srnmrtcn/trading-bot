@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.db.models import Kline, PortfolioPosition
+from src.db.models import FuturesDailyKline, PortfolioPosition
 from src.portfolio.book import open_positions, portfolio_equity
 from src.portfolio.config import REBALANCE_DAYS, STARTING_EQUITY
 from src.portfolio.rebalancer import RebalanceResult, run_rebalance
@@ -14,9 +14,9 @@ NOW = BASLANGIC + timedelta(days=70)
 def _ekle(session, sembol, gun_sayisi, drift, dolar=Decimal(60000000)):
     price = Decimal(100)
     for i in range(gun_sayisi):
-        session.add(Kline(symbol=sembol, timeframe='1d', open_time=BASLANGIC + timedelta(days=i),
-                          open=price, high=price, low=price, close=price,
-                          volume=dolar / price, flagged=False))
+        session.add(FuturesDailyKline(symbol=sembol,
+                                      open_time=BASLANGIC + timedelta(days=i),
+                                      close=price, volume=dolar / price))
         price = price * (Decimal(1) + Decimal(str(drift)))
 
 
