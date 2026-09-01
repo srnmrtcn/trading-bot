@@ -57,7 +57,13 @@ def crossed_up_recently(rsi_series: list, window: int) -> bool:
     """
     RSI serisinin SON `window` kapali mumunda asiri satim cizgisi yukari kesilmis mi?
     """
-    raise NotImplementedError
+    for index in range(len(rsi_series) - 1, max(len(rsi_series) - 1 - window, 0), -1):
+        current, previous = rsi_series[index], rsi_series[index - 1]
+        if current is None or previous is None:
+            continue
+        if previous < RSI_OVERSOLD <= current:
+            return True
+    return False
 
 
 def evaluate_signal_delayed(klines: list, window: int = DELAYED_CONFIRM_WINDOW):
@@ -65,4 +71,21 @@ def evaluate_signal_delayed(klines: list, window: int = DELAYED_CONFIRM_WINDOW):
     Gecikmeli kural: RSI asiri satim cizgisini SON `window` kapali mum icinde yukari kesmis olsun,
     VE son 3 mumluk pencerede hacim destekli bogal EMA kesisimi olsun.
     """
-    raise NotImplementedError
+    if len(klines) < MIN_CANDLES:
+        return None
+    closes = [c["close"] for c in klines]
+    volumes = [c["volume"] for c in klines]
+    rsi_series = compute_rsi(closes, RSI_PERIOD)
+    if not crossed_up_recently(rsi_series, window):
+        return None
+    current_rsi, previous_rsi = rsi_series[-1], rsi_series[-2]
+    if current_rsi is None or previous_rsi is None:
+        return None
+    crossover = detect_confluence_in_window(
+        compute_ema(closes, EMA_FAST_PERIOD), compute_ema(closes, EMA_SLOW_PERIOD),
+        volumes, VOLUME_LOOKBACK, VOLUME_MULTIPLIER, CONFLUENCE_WINDOW,
+    )
+    if crossover != "bullish":
+        return None
+    return SignalResult(direction="long", entry_price=closes[-1],
+                        rsi=current_rsi, previous_rsi=previous_rsi)
