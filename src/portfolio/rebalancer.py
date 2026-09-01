@@ -87,4 +87,37 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     """
     Executes a rebalance operation, closing existing positions and opening new ones.
     """
-    raise NotImplementedError
+    now = now if now is not None else utc_now()
+    equity = portfolio_equity(session)
+    if not is_rebalance_due(session, now):
+        return RebalanceResult(False, 0, 0, equity, 0)
+
+    history = LIQUIDITY_WINDOW_DAYS + max(LOOKBACK_DAYS) + SIGNAL_SKIP_DAYS + 2
+    bars = load_daily_bars(session, now, history)
+    closes = {symbol: closes_by_day(rows) for symbol, rows in bars.items()}
+
+    closed = 0
+    for position in open_positions(session):
+        day_closes = closes.get(position.symbol) or {}
+        if not day_closes:
+            continue
+        events = funding_events_between(session, position.symbol, position.opened_at, now)
+        equity += close_position(session, position, day_closes[max(day_closes)], events, now)
+        closed += 1
+
+    as_of = (floor_to_timeframe(now, "1d") - timedelta(days=1)).date()
+    opened = 0
+    universe = 0
+    if equity > 0:
+        longs, shorts, prices = book_for(
+            bars, as_of, LOOKBACK_DAYS, SIGNAL_SKIP_DAYS, TOP_FRACTION,
+            LIQUIDITY_WINDOW_DAYS, MIN_DOLLAR_VOLUME, MIN_UNIVERSE,
+        )
+        universe = len(longs) + len(shorts)
+        for direction, names in (("long", longs), ("short", shorts)):
+            for symbol, size in position_sizes(equity, names, prices, LEG_EXPOSURE).items():
+                record_open(session, symbol, direction, prices[symbol], size, now)
+                opened += 1
+
+    record_snapshot(session, now, equity, closed, opened)
+    return RebalanceResult(True, closed, opened, equity, universe)
