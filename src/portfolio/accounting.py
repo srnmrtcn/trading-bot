@@ -1,5 +1,14 @@
-from decimal import Decimal
+"""Sizing and P&L for the dollar-neutral momentum book.
 
+Costs are NOT here. src/trading_costs.py already owns round-trip fees and
+funding, and the funding one is the better implementation: it charges each
+settlement against the mark price that was actually printed, rather than
+against the entry price for the whole window. Two copies of cost arithmetic
+in one repository is how a fee change lands in one path and not the other.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
 def position_sizes(equity, symbols: list, prices: dict, leg_exposure) -> dict:
     """
     Bir bacaktaki her sembol icin kac BIRIM alinacagini/satilacagini dondurur.
@@ -24,21 +33,3 @@ def position_pnl(direction: str, entry_price, exit_price, size) -> Decimal:
     if direction == "short":
         return (entry_price - exit_price) * size
     raise ValueError("unknown direction: %r" % direction)
-
-def round_trip_cost(entry_price, exit_price, size, fee_rate) -> Decimal:
-    """
-    Iki dolusun toplam maliyeti: (entry_price + exit_price) * size * fee_rate.
-    """
-    return (entry_price + exit_price) * size * fee_rate
-
-def funding_cost(direction: str, funding_sum, entry_price, size) -> Decimal:
-    """
-    Pozisyon acikken tahakkuk eden funding'in NAKIT maliyeti.
-    """
-    if direction == "long":
-        sign = Decimal(1)
-    elif direction == "short":
-        sign = Decimal(-1)
-    else:
-        raise ValueError("unknown direction: %r" % direction)
-    return sign * funding_sum * entry_price * size

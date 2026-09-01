@@ -1,6 +1,6 @@
 from decimal import Decimal
 import pytest
-from src.portfolio.accounting import funding_cost, position_pnl, position_sizes, round_trip_cost
+from src.portfolio.accounting import position_pnl, position_sizes
 
 def test_position_sizes_esit_notional():
     result = position_sizes(Decimal(10000), ['A','B'], {'A': Decimal(100), 'B': Decimal(50)}, Decimal(1))
@@ -52,27 +52,3 @@ def test_position_pnl_long_kaybeder():
 def test_position_pnl_bilinmeyen_yon():
     with pytest.raises(ValueError):
         position_pnl('flat', Decimal(100), Decimal(110), Decimal(2))
-
-def test_round_trip_cost_iki_dolus():
-    result = round_trip_cost(Decimal(100), Decimal(110), Decimal(2), Decimal('0.0006'))
-    expected = Decimal('0.2520')
-    assert result == expected
-
-def test_funding_cost_long_oder():
-    result = funding_cost('long', Decimal('0.001'), Decimal(100), Decimal(2))
-    expected = Decimal('0.200')
-    assert result == expected
-
-def test_funding_cost_short_tahsil_eder():
-    result = funding_cost('short', Decimal('0.001'), Decimal(100), Decimal(2))
-    expected = Decimal('-0.200')
-    assert result == expected
-
-def test_funding_cost_negatif_funding_tersine_cevirir():
-    result = funding_cost('long', Decimal('-0.001'), Decimal(100), Decimal(2))
-    expected = Decimal('-0.200')
-    assert result == expected
-
-def test_funding_cost_bilinmeyen_yon():
-    with pytest.raises(ValueError):
-        funding_cost('flat', Decimal('0.001'), Decimal(100), Decimal(2))
