@@ -50,6 +50,44 @@ from src.strategy_version import STRATEGY_VERSION
 REGIME_SYMBOL = "BTCUSDT"
 
 
+PROGRESS_TABLE = "replay_progress"
+
+
+def read_progress(db: Path):
+    """Where the last run stopped, or None for a fresh database.
+
+    A replay of a year is longer than any single watcher verify window, so it
+    has to survive being cut off. The cursor lives in the replay database
+    itself rather than a side file, because the two must never disagree about
+    how far the simulation got.
+    """
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute("SELECT next_start, end_at, symbols FROM %s WHERE id=1"
+                           % PROGRESS_TABLE).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
+    if not row:
+        return None
+    return datetime.fromisoformat(row[0]), datetime.fromisoformat(row[1]), int(row[2])
+
+
+def write_progress(db: Path, next_start: datetime, end_at: datetime, symbols: int) -> None:
+    """The symbol count is part of the cursor: the universe is the top N by
+    row count, so resuming with a different N would silently replay a
+    different market than the half already simulated."""
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, "
+                 "next_start TEXT, end_at TEXT, symbols INTEGER)" % PROGRESS_TABLE)
+    conn.execute("INSERT OR REPLACE INTO %s (id, next_start, end_at, symbols) "
+                 "VALUES (1,?,?,?)" % PROGRESS_TABLE,
+                 (next_start.isoformat(), end_at.isoformat(), symbols))
+    conn.commit()
+    conn.close()
+
+
 def prepare(source: Path, target: Path) -> None:
     """A working copy, because the replay writes scenarios and positions.
 
@@ -186,6 +224,10 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=90)
     ap.add_argument("--end", default=None, help="ISO tarih; varsayilan verinin sonu")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--keep", action="store_true",
+                    help="mevcut replay veritabanindan devam et")
+    ap.add_argument("--budget", type=int, default=0,
+                    help="saniye; dolunca temiz durur, --keep ile devam edilir")
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -193,36 +235,52 @@ def main() -> int:
         format="%(levelname)s %(name)s %(message)s")
 
     source, target = Path(args.source), Path(args.db)
-    if not source.exists():
-        print("kaynak veritabani yok: %s" % source, file=sys.stderr)
-        return 2
-    prepare(source, target)
+    resume = read_progress(target) if (args.keep and target.exists()) else None
+    if resume is None:
+        if not source.exists():
+            print("kaynak veritabani yok: %s" % source, file=sys.stderr)
+            return 2
+        prepare(source, target)
 
     engine = make_engine("sqlite:///%s" % target.as_posix())
     create_all_tables(engine)
     session = make_session_factory(engine)()
 
-    symbols = universe(target, args.symbols)
+    requested = resume[2] if resume else args.symbols
+    symbols = universe(target, requested)
     seed_symbols(session, symbols)
 
-    conn = sqlite3.connect(target)
-    last = conn.execute(
-        "SELECT MAX(open_time) FROM klines WHERE timeframe='1h'").fetchone()[0]
-    conn.close()
-    end = datetime.fromisoformat(args.end) if args.end else datetime.fromisoformat(last)
-    end = end.replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=args.days)
+    if resume is not None:
+        start, end, _ = resume
+        print("devam ediliyor: %s tarihinden" % start)
+    else:
+        conn = sqlite3.connect(target)
+        last = conn.execute(
+            "SELECT MAX(open_time) FROM klines WHERE timeframe='1h'").fetchone()[0]
+        conn.close()
+        end = datetime.fromisoformat(args.end) if args.end else datetime.fromisoformat(last)
+        end = end.replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(days=args.days)
 
     schedule = funding_schedule(target, symbols)
-    cursor = 0
+    # On a resume the cursor is rebuilt from the clock, not carried: every
+    # settlement at or before the restart point has already been applied.
+    cursor = sum(1 for stamp, _, _ in schedule if stamp < start)
+    hours = max(int((end - start).total_seconds() // 3600) + 1, 0)
     print("replay %s -> %s  (%d saat, %d sembol, surum %s)"
-          % (start, end, args.days * 24, len(symbols), STRATEGY_VERSION))
+          % (start, end, hours, len(symbols), STRATEGY_VERSION))
 
     now = start
     step = 0
     t0 = time.time()
     generated = opened = 0
+    deadline = t0 + args.budget if args.budget else float("inf")
     while now <= end:
+        if time.time() >= deadline:
+            write_progress(target, now, end, requested)
+            print("\nsure doldu, %s tarihinde durdu - --keep ile devam" % now)
+            report(session)
+            return 0
         cursor = apply_funding(session, schedule, cursor, now)
         scen = run_scenario_generation(session, symbols, now=now)
         run_learning_cycle(session, now=now)
@@ -237,6 +295,7 @@ def main() -> int:
                   % (now.date(), generated, opened, rate, left), flush=True)
         now += timedelta(hours=1)
 
+    write_progress(target, end + timedelta(hours=1), end, requested)
     print("\nbitti: %d adim, %.0f sn" % (step, time.time() - t0))
     report(session)
     return 0
