@@ -127,3 +127,50 @@ class FundingRate(Base):
     symbol = Column(String, primary_key=True)
     funding_rate = Column(Numeric(10, 8), nullable=False)
     fetched_at = Column(DateTime, nullable=False)
+
+
+class PortfolioPosition(Base):
+    __tablename__ = "portfolio_positions"
+
+    # The portfolio path's own position table, deliberately not PaperPosition.
+    # A paper position is a barrier trade: it must carry a stop and a target,
+    # and it closes when one of them is touched. This strategy has neither. It
+    # holds a basket, rebalances on a clock, and exits because the clock said
+    # so. Storing it in PaperPosition would mean inventing a stop_price and a
+    # target_price that nothing reads and that every report would then have to
+    # explain.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_version = Column(String, nullable=False, index=True)
+    symbol = Column(String, nullable=False, index=True)
+    direction = Column(String, nullable=False)
+    entry_price = Column(Numeric(20, 8), nullable=False)
+    position_size = Column(Numeric(20, 8), nullable=False)
+    opened_at = Column(DateTime, nullable=False)
+    status = Column(String, nullable=False, default="open")
+    closed_at = Column(DateTime, nullable=True)
+    exit_price = Column(Numeric(20, 8), nullable=True)
+    # Kept apart rather than folded into one net figure: a book that is
+    # profitable before costs and unprofitable after has a fee problem, and a
+    # book whose funding line dominates is not really trading momentum any
+    # more. Netting them hides both diagnoses.
+    gross_pnl = Column(Numeric(20, 8), nullable=True)
+    fee_cost = Column(Numeric(20, 8), nullable=True)
+    funding_cost = Column(Numeric(20, 8), nullable=True)
+    realized_pnl = Column(Numeric(20, 8), nullable=True)
+
+
+class PortfolioSnapshot(Base):
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        UniqueConstraint("strategy_version", "as_of", name="uq_portfolio_snapshot_version_time"),
+    )
+
+    # Equity is recorded per rebalance rather than per position, because the
+    # whole book closes and reopens at once: there is no single position whose
+    # exit "is" the new equity the way there is on the paper path.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_version = Column(String, nullable=False, index=True)
+    as_of = Column(DateTime, nullable=False)
+    equity = Column(Numeric(20, 8), nullable=False)
+    positions_closed = Column(Integer, nullable=False, default=0)
+    positions_opened = Column(Integer, nullable=False, default=0)
