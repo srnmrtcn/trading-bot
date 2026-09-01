@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from src.db.models import Kline
+from src.db.models import Kline, PortfolioPosition
 from src.portfolio.book import open_positions, portfolio_equity
 from src.portfolio.config import REBALANCE_DAYS, STARTING_EQUITY
 from src.portfolio.rebalancer import RebalanceResult, run_rebalance
@@ -106,11 +106,11 @@ def test_run_rebalance_closes_first_then_opens_new_positions(db_session):
 def test_run_rebalance_accounting_for_closed_positions(db_session):
     _evren(db_session)
     run_rebalance(db_session, NOW)
-    sonuc2 = run_rebalance(db_session, NOW + timedelta(days=REBALANCE_DAYS))
-    pos = open_positions(db_session)
-    assert len(pos) == 8
-    for p in pos:
-        assert p.status == 'closed'
+    run_rebalance(db_session, NOW + timedelta(days=REBALANCE_DAYS))
+    kapananlar = db_session.query(PortfolioPosition).filter(
+        PortfolioPosition.status == 'closed').all()
+    assert len(kapananlar) == 8
+    for p in kapananlar:
         assert p.realized_pnl is not None
         assert p.gross_pnl is not None
 
@@ -124,7 +124,6 @@ def test_run_rebalance_has_cost_for_closing_and_opening(db_session):
 
 
 def test_run_rebalance_does_not_open_positions_if_no_universe(db_session):
-    run_rebalance(db_session, NOW)
     sonuc = run_rebalance(db_session, NOW)
     assert sonuc.acted is True
     assert sonuc.opened == 0
