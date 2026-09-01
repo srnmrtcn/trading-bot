@@ -35,9 +35,18 @@ TOP_FRACTION = Decimal("0.2")
 MIN_DOLLAR_VOLUME = Decimal("50000000")
 LIQUIDITY_WINDOW_DAYS = 30
 
-# Notional per leg as a multiple of equity. Two legs, so gross exposure is
-# twice this. The measured drawdown of 16.9% is at exactly this exposure.
-LEG_EXPOSURE = Decimal("1")
+# Notional per leg as a multiple of equity. TWO legs, so gross exposure is
+# twice this number.
+#
+# 0.5, not 1. The measurement reported the spread "per unit of capital" by
+# halving it -- long leg plus short leg is 2x gross, so a spread of 2.3% a week
+# on gross is 1.16% on capital. Setting a leg to 1x equity would run the book
+# at 2x gross and earn the whole spread, which is the SAME strategy at double
+# the leverage: the end-to-end replay showed +2.23% a week and a 25% drawdown
+# against the +1.16% and 16.9% the research quoted. Neither number was wrong;
+# they describe different amounts of borrowed money. This is the one the
+# research characterised, so this is the one that ships.
+LEG_EXPOSURE = Decimal("0.5")
 
 # A leg needs enough names for equal weighting to mean anything.
 MIN_UNIVERSE = 15

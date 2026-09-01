@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from src.db.models import FuturesDailyKline, PortfolioPosition
 from src.portfolio.book import open_positions, portfolio_equity
-from src.portfolio.config import REBALANCE_DAYS, STARTING_EQUITY
+from src.portfolio.config import LEG_EXPOSURE, REBALANCE_DAYS, STARTING_EQUITY
 from src.portfolio.rebalancer import RebalanceResult, run_rebalance
 
 
@@ -61,7 +61,7 @@ def test_run_rebalance_has_total_exposure_of_twice_the_equity(db_session):
     run_rebalance(db_session, NOW)
     pos = open_positions(db_session)
     total_notional = sum(p.entry_price * p.position_size for p in pos)
-    diff = abs(total_notional - STARTING_EQUITY * 2)
+    diff = abs(total_notional - STARTING_EQUITY * LEG_EXPOSURE * 2)
     assert diff < Decimal('0.01')
 
 
