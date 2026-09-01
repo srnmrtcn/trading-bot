@@ -73,12 +73,13 @@ def test_book_for_illiquid_symbol_not_selected():
 
 
 def test_book_for_prices_correct():
-    veri = {'A': _bars(40,0.010), 'B': _bars(40,0.008), 'C': _bars(40,0.006), 'D': _bars(40,0.004)}
+    veri = {'A': _bars(40,0.010), 'B': _bars(40,0.008), 'C': _bars(40,0.006),
+            'D': _bars(40,0.004), 'E': _bars(40,0.002), 'F': _bars(40,0.000)}
     longs, shorts, prices = book_for(veri, AS_OF, (7,14), 1, Decimal('0.34'), 30, Decimal(5000000), 4)
     assert len(prices) == 4
     for symbol in longs + shorts:
         assert symbol in prices
-        assert prices[symbol] == _bars(40, 0.010)[39]['close']
+        assert prices[symbol] == closes_by_day(veri[symbol])[AS_OF]
 
 
 def test_book_for_small_universe_returns_empty():
