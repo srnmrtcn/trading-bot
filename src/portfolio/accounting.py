@@ -9,6 +9,8 @@ in one repository is how a fee change lands in one path and not the other.
 from __future__ import annotations
 
 from decimal import Decimal
+
+
 def position_sizes(equity, symbols: list, prices: dict, leg_exposure) -> dict:
     """
     Bir bacaktaki her sembol icin kac BIRIM alinacagini/satilacagini dondurur.
@@ -23,6 +25,7 @@ def position_sizes(equity, symbols: list, prices: dict, leg_exposure) -> dict:
             continue
         sizes[symbol] = per_name / price
     return sizes
+
 
 def position_pnl(direction: str, entry_price, exit_price, size) -> Decimal:
     """

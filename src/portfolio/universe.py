@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
+
 def daily_dollar_volume(klines: list) -> dict:
     """
     Saatlik mum listesini gunluk dolar hacmine toplar.
@@ -15,6 +16,7 @@ def daily_dollar_volume(klines: list) -> dict:
         day = row["open_time"].date()
         totals[day] = totals.get(day, Decimal(0)) + row["close"] * row["volume"]
     return totals
+
 
 def median_value(values: list):
     """
@@ -33,6 +35,7 @@ def median_value(values: list):
     if n % 2:
         return ordered[middle]
     return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
+
 
 def lookback_return(closes: dict, end_day, lookback_days: int):
     """
