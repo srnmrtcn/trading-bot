@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 def daily_dollar_volume(klines: list) -> dict:
@@ -10,9 +10,13 @@ def daily_dollar_volume(klines: list) -> dict:
     Bos liste -> bos sozluk.
     Aritmetik tamamen Decimal; float'a DONULMEZ.
     """
-    raise NotImplementedError
+    totals = {}
+    for row in klines:
+        day = row["open_time"].date()
+        totals[day] = totals.get(day, Decimal(0)) + row["close"] * row["volume"]
+    return totals
 
-def median_value(values: list) -> Decimal:
+def median_value(values: list):
     """
     Decimal listesinin medyani.
         Bos liste -> None.
@@ -21,7 +25,14 @@ def median_value(values: list) -> Decimal:
       Girdi listesi DEGISTIRILMEZ (kendi kopyani sirala).
       Ornek: [Decimal(1), Decimal(3), Decimal(2)] -> Decimal(2); [Decimal(1), Decimal(2), Decimal(3), Decimal(10)] -> Decimal('2.5')
     """
-    raise NotImplementedError
+    if not values:
+        return None
+    ordered = sorted(values)
+    n = len(ordered)
+    middle = n // 2
+    if n % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / Decimal(2)
 
 def lookback_return(closes: dict, end_day, lookback_days: int):
     """
@@ -35,4 +46,10 @@ def lookback_return(closes: dict, end_day, lookback_days: int):
         5. Aksi halde closes[end_day] / closes[base_day] - 1 dondur (Decimal)
     Eksik gun icin None dondurmek bilincli: takvim gunu bazinda calisiyoruz ve veri bosluğu olan sembol o hafta siralamaya HIC girmemeli, elindeki kismi pencereyle siralanmamali.
     """
-    raise NotImplementedError
+    base_day = end_day - timedelta(days=lookback_days)
+    if end_day not in closes or base_day not in closes:
+        return None
+    base = closes[base_day]
+    if base <= 0:
+        return None
+    return closes[end_day] / base - 1
