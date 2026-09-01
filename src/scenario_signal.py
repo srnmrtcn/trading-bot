@@ -14,6 +14,7 @@ RSI_OVERSOLD = Decimal("30")
 RSI_OVERBOUGHT = Decimal("70")
 MIN_CANDLES = 100
 CONFLUENCE_WINDOW = 3
+DELAYED_CONFIRM_WINDOW = 15
 
 
 @dataclass
@@ -50,3 +51,18 @@ def evaluate_signal(klines: list):
     if previous_rsi > RSI_OVERBOUGHT >= current_rsi and crossover == "bearish":
         return SignalResult(direction="short", entry_price=entry_price, rsi=current_rsi, previous_rsi=previous_rsi)
     return None
+
+
+def crossed_up_recently(rsi_series: list, window: int) -> bool:
+    """
+    RSI serisinin SON `window` kapali mumunda asiri satim cizgisi yukari kesilmis mi?
+    """
+    raise NotImplementedError
+
+
+def evaluate_signal_delayed(klines: list, window: int = DELAYED_CONFIRM_WINDOW):
+    """
+    Gecikmeli kural: RSI asiri satim cizgisini SON `window` kapali mum icinde yukari kesmis olsun,
+    VE son 3 mumluk pencerede hacim destekli bogal EMA kesisimi olsun.
+    """
+    raise NotImplementedError
