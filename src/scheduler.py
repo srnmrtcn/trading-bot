@@ -262,6 +262,20 @@ def run_symbol_refresh_job(session_factory, binance_client) -> None:
         session.close()
 
 
+def run_futures_daily_job(session_factory, binance_client, now: datetime = None) -> None:
+    """
+    Run the daily futures kline refresh job.
+    """
+    raise NotImplementedError
+
+
+def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
+    """
+    Run the portfolio rebalance job.
+    """
+    raise NotImplementedError
+
+
 def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
@@ -282,6 +296,20 @@ def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:
         lambda: run_symbol_refresh_job(session_factory, binance_client),
         CronTrigger(hour=0, minute=0),
         id="symbol_refresh",
+        misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: run_futures_daily_job(session_factory, binance_client),
+        CronTrigger(hour=0, minute=20),
+        id="futures_daily_bars",
+        misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        lambda: run_portfolio_rebalance_job(session_factory),
+        CronTrigger(hour=0, minute=30),
+        id="portfolio_rebalance",
         misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
         coalesce=True,
     )
