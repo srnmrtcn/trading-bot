@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -134,6 +135,13 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
         succeeded = 0
         failed = 0
         gaps_filled = 0
+        # Where the wall clock goes. The 1h job takes about twenty-three
+        # minutes on 485 symbols and until now the only number was the total,
+        # which makes every optimisation a guess. These three cover the run:
+        # the per-symbol fetch, the per-symbol gap scan, and everything after
+        # the symbol loop (funding, regime, scenarios, learning, paper).
+        fetch_seconds = 0.0
+        gap_seconds = 0.0
         for symbol in symbols:
             # Decided once, after the whole per-symbol block, so a symbol can
             # never be counted as both succeeded and failed.
@@ -141,11 +149,13 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             try:
                 start = get_resume_point(session, symbol, timeframe, now=end)
                 started_at = utc_now()
+                _fetch_started = time.monotonic()
                 result = process_symbol_timeframe(
                     session, binance_client, symbol, timeframe,
                     start_ms=to_epoch_ms(start),
                     end_ms=to_epoch_ms(end),
                 )
+                fetch_seconds += time.monotonic() - _fetch_started
                 if result.error:
                     logger.error("Fetch failed for %s %s: %s", symbol, timeframe, result.error)
                 record_run(
@@ -158,7 +168,9 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                     # Skip gap repair when the plain fetch just failed: the
                     # next run retries both, and there is no point hammering an
                     # unreachable API twice per symbol.
+                    _gap_started = time.monotonic()
                     gaps_filled += repair_recent_gaps(session, binance_client, symbol, timeframe, now=end)
+                    gap_seconds += time.monotonic() - _gap_started
                     symbol_ok = True
             except Exception:
                 # A single symbol's failure (including a failure in
@@ -174,6 +186,7 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             else:
                 failed += 1
 
+        tail_started = time.monotonic()
         funding_result = None
         scenario_result = None
         learning_result = None
@@ -227,6 +240,8 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 # in the paper trading cycle itself.
                 logger.exception("Paper trading cycle failed for the %s job", timeframe)
 
+        tail_seconds = time.monotonic() - tail_started
+
         fmt = "%s job finished: %d symbols succeeded, %d failed, %d gaps filled"
         args = [timeframe, succeeded, failed, gaps_filled]
         if funding_result is not None:
@@ -243,6 +258,8 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             fmt += ", %d positions closed, %d opened"
             args.append(paper_result.closed)
             args.append(paper_result.opened)
+        fmt += " | fetch %.0fs, gap scan %.0fs, tail %.0fs"
+        args.extend([fetch_seconds, gap_seconds, tail_seconds])
         logger.info(fmt, *args)
     finally:
         session.close()

@@ -299,9 +299,22 @@ def _seed_symbol_with_one_hour_gap(db_session):
 
 
 def _summary_lines(caplog):
+    """Summary lines with the timing suffix stripped.
+
+    The line ends with "| fetch Ns, gap scan Ns, tail Ns" and those numbers are
+    wall clock, so they cannot be asserted on exactly. Every assertion below is
+    about the COUNTS, which are deterministic; the timings have their own test.
+    """
     return [
-        record.getMessage() for record in caplog.records
+        record.getMessage().split(" | ")[0] for record in caplog.records
         if record.name == "scheduler" and "job finished" in record.getMessage()
+    ]
+
+
+def _timing_suffixes(caplog):
+    return [
+        record.getMessage().split(" | ")[1] for record in caplog.records
+        if record.name == "scheduler" and " | " in record.getMessage()
     ]
 
 
@@ -672,3 +685,27 @@ def test_run_timeframe_job_does_not_refresh_funding_for_1d(db_session, monkeypat
     run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1d")
 
     assert calls == []
+
+
+# --- kosunun nereye gittigi ------------------------------------------------
+# Saatlik is 485 sembolde ~23 dakika suruyor ve simdiye kadar elimizdeki tek
+# sayi toplamdi. Toplamla optimizasyon tahmindir: fetch mi, bosluk taramasi mi,
+# kuyruk isleri mi bilmeden hangi tarafi hizlandiracagini secemezsin. Uc faz
+# kosunun tamamini kapsiyor.
+
+def test_summary_line_reports_where_the_time_went(db_session, caplog):
+    hour, _ = _seed_symbol_with_one_hour_gap(db_session)
+    client = _GapServingClient(available=[hour - timedelta(hours=n) for n in (3, 2, 1, 0)])
+
+    with caplog.at_level(logging.INFO, logger="scheduler"):
+        run_timeframe_job(
+            session_factory=lambda: db_session, binance_client=client,
+            timeframe="1h", now=hour + timedelta(minutes=5),
+        )
+
+    ekler = _timing_suffixes(caplog)
+    assert len(ekler) == 1
+    for faz in ("fetch", "gap scan", "tail"):
+        assert faz in ekler[0]
+    # Saniye biciminde ve okunabilir olmali; "fetch 12s" gibi.
+    assert ekler[0].count("s,") == 2 and ekler[0].endswith("s")
