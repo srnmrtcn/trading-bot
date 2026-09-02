@@ -118,5 +118,15 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
                 record_open(session, symbol, direction, prices[symbol], size, now)
                 opened += 1
 
+    if closed == 0 and opened == 0:
+        # Nothing happened, so the week is NOT spent. Recording a snapshot here
+        # would set the clock and block the next attempt for a full
+        # REBALANCE_DAYS -- which is exactly the wrong response to the reason
+        # this branch is usually reached: the daily bars did not arrive, so
+        # there was no universe to rank. That is a data outage lasting minutes,
+        # and it would have cost a week of trading. A book that legitimately
+        # has too few eligible names simply retries tomorrow, which is cheap.
+        return RebalanceResult(False, 0, 0, equity, universe)
+
     record_snapshot(session, now, equity, closed, opened)
     return RebalanceResult(True, closed, opened, equity, universe)

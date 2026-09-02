@@ -125,7 +125,19 @@ def test_run_rebalance_has_cost_for_closing_and_opening(db_session):
 
 def test_run_rebalance_does_not_open_positions_if_no_universe(db_session):
     sonuc = run_rebalance(db_session, NOW)
-    assert sonuc.acted is True
+    assert sonuc.acted is False
     assert sonuc.opened == 0
     assert sonuc.universe == 0
     assert len(open_positions(db_session)) == 0
+
+
+def test_run_rebalance_bos_kosu_haftayi_harcamaz(db_session):
+    # Veri gelmediyse denge yapilamaz; o hafta harcanmis SAYILMAZ, yarin
+    # tekrar denenir. Aksi halde birkac dakikalik bir veri kesintisi bir
+    # haftalik islem kaybina donerdi.
+    bos = run_rebalance(db_session, NOW)
+    assert bos.acted is False
+    _evren(db_session)
+    sonuc = run_rebalance(db_session, NOW)
+    assert sonuc.acted is True
+    assert sonuc.opened == 8
