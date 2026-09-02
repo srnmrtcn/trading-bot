@@ -167,3 +167,51 @@ def test_rebalance_isi_sirasi_gelmediyse_uyarmaz(db_session, caplog):
     with caplog.at_level(logging.WARNING, logger='src.scheduler'):
         run_portfolio_rebalance_job(lambda: db_session, NOW + timedelta(days=1))
     assert [k for k in caplog.records if k.levelno == logging.WARNING] == []
+
+
+# --- isler sirayla kosmali, ayni anda degil ---------------------------------
+# Saatlik is 00:05'te basliyor ve yaklasik 24 dakika suruyor; gunluk mum
+# suprgesi 00:10'da basliyor ve 19 dakika suruyor. Yani HER GUN 19 dakika
+# boyunca iki sembol supurgesi ayni rate-limit'li Binance istemcisini
+# paylasiyor - 418'in gelis sekli tam olarak bu. Isleri saatte bir oteleyerek
+# cozmek tahmin: her isin suresi zamanla degisir ve bir gun yine cakisirlar.
+# Yapisal cozum tek isci: isler kuyruga girer, tetiklenme sirasina gore
+# kosar, ve bar isinin dengelemeden once bitmesi artik zamanlama sansina
+# degil kuyruk sirasina bagli olur.
+
+def test_scheduler_isleri_ayni_anda_kosturmaz():
+    import threading
+    import time
+    from datetime import datetime, timezone as _tz
+    from apscheduler.triggers.date import DateTrigger
+
+    scheduler = build_scheduler(session_factory=lambda: None, binance_client=None)
+    scheduler.remove_all_jobs()          # gercek isler bu testte kosmasin
+
+    kilit = threading.Lock()
+    araliklar = []
+
+    def _mesgul(ad):
+        basla = time.monotonic()
+        time.sleep(0.3)
+        with kilit:
+            araliklar.append((ad, basla, time.monotonic()))
+
+    calis = datetime.now(_tz.utc)
+    for ad in ("a", "b"):
+        scheduler.add_job(_mesgul, DateTrigger(run_date=calis), args=[ad],
+                          id=ad, misfire_grace_time=60)
+    scheduler.start()
+    try:
+        for _ in range(100):
+            if len(araliklar) == 2:
+                break
+            time.sleep(0.05)
+    finally:
+        scheduler.shutdown(wait=True)
+
+    assert len(araliklar) == 2, 'iki is de kosmadi'
+    araliklar.sort(key=lambda k: k[1])
+    (_, _, ilk_bitis), (_, ikinci_basla, _) = araliklar
+    assert ikinci_basla >= ilk_bitis, 'isler ust uste kostu'
+

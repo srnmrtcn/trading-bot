@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
+from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -314,7 +315,30 @@ def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
 
 
 def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:
-    scheduler = BackgroundScheduler(timezone="UTC")
+    # One worker, so jobs queue instead of racing. APScheduler's default pool
+    # is ten threads, and the schedule has a standing collision: the hourly
+    # job starts at 00:05 and takes about twenty-four minutes, the daily kline
+    # sweep starts at 00:10 and takes nineteen. Every day, for nineteen
+    # minutes, two symbol sweeps share one rate-limited Binance client. That
+    # is how a 418 arrives, and it would read as a data problem rather than a
+    # scheduling one.
+    #
+    # Moving jobs further apart was the earlier answer and it is guesswork:
+    # every one of these durations grows with the symbol count, so any gap
+    # chosen today closes on its own later. A single worker removes the
+    # question. It also makes the book's ordering a property of the queue
+    # rather than of timing luck -- the bar job is triggered before the
+    # rebalance, so it runs before it, however long the jobs ahead of them
+    # take.
+    #
+    # Safe because the misfire windows are wide: thirty minutes hourly, two
+    # hours daily. The longest wait a queued job can inherit here is the
+    # daily sweep, well inside both.
+    scheduler = BackgroundScheduler(
+        timezone="UTC",
+        executors={"default": ThreadPoolExecutor(1)},
+        job_defaults={"max_instances": 1, "coalesce": True},
+    )
     scheduler.add_job(
         lambda: run_timeframe_job(session_factory, binance_client, "1h"),
         CronTrigger(minute=5),
