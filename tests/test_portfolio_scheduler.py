@@ -113,5 +113,5 @@ def test_build_scheduler_mumlar_dengeden_once():
     jobs = {job.id: job for job in scheduler.get_jobs()}
     mumlar = str(jobs['futures_daily_bars'].trigger)
     denge = str(jobs['portfolio_rebalance'].trigger)
-    assert "minute='20'" in mumlar
-    assert "minute='30'" in denge
+    assert "minute='40'" in mumlar
+    assert "minute='50'" in denge

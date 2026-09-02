@@ -323,16 +323,20 @@ def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:
         misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
         coalesce=True,
     )
+    # 00:40, not 00:20. The daily kline job starts at 00:10 and walks every
+    # active symbol, which takes about sixteen minutes; nothing stops these
+    # from running at once, and two sweeps sharing one rate-limited client is
+    # how a 418 arrives. Forty minutes past leaves the earlier job clear.
     scheduler.add_job(
         lambda: run_futures_daily_job(session_factory, binance_client),
-        CronTrigger(hour=0, minute=20),
+        CronTrigger(hour=0, minute=40),
         id="futures_daily_bars",
         misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
         coalesce=True,
     )
     scheduler.add_job(
         lambda: run_portfolio_rebalance_job(session_factory),
-        CronTrigger(hour=0, minute=30),
+        CronTrigger(hour=0, minute=50),
         id="portfolio_rebalance",
         misfire_grace_time=DAILY_MISFIRE_GRACE_SECONDS,
         coalesce=True,
