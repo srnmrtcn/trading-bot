@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, Numeric, String, Text,
+    UniqueConstraint,
+)
 
 from src.db.base import Base
 from src.timeutil import utc_now
@@ -51,6 +54,28 @@ class Kline(Base):
 
 class FetchLog(Base):
     __tablename__ = "fetch_log"
+
+    # This table grows by roughly one row per active symbol per timeframe per
+    # run -- around ten thousand rows a day at the current universe -- and is
+    # read on two hot paths that both have to stay fast as it grows:
+    #
+    #   get_last_successful_run  filters symbol + timeframe + status and takes
+    #                            the latest finished_at. The composite index
+    #                            answers it from the index alone.
+    #   get_system_health        takes the single most recent finished_at over
+    #                            the whole table, and is behind /health, which
+    #                            a platform probe may call every few seconds.
+    #                            Its leading column is finished_at, so the
+    #                            composite above cannot serve it.
+    #
+    # The per-column symbol and timeframe indexes below predate these and are
+    # now largely redundant, but dropping an index on a live table is a
+    # destructive change with no upside here, so they stay.
+    __table_args__ = (
+        Index("ix_fetch_log_symbol_timeframe_status_finished",
+              "symbol", "timeframe", "status", "finished_at"),
+        Index("ix_fetch_log_finished_at", "finished_at"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     symbol = Column(String, nullable=False, index=True)

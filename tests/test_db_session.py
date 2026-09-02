@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import Column, MetaData, Table, create_engine, inspect
+from sqlalchemy import Column, MetaData, Table, create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from src.db.models import Scenario
-from src.db.session import create_all_tables, sync_missing_columns
+from src.db.session import (
+    create_all_tables,
+    sync_missing_columns,
+    sync_missing_indexes,
+)
 
 # The two columns Subsystem C added to the already-existing `scenarios` table.
 SUBSYSTEM_C_COLUMNS = ("resolved_at", "calibrated_confidence")
@@ -119,3 +123,71 @@ def test_engine_pre_pings_and_recycles_pooled_connections():
 
     assert engine.pool._pre_ping is True
     assert engine.pool._recycle == POOL_RECYCLE_SECONDS
+
+
+# --- eksik indeksler -----------------------------------------------------
+# Eksik bir SUTUN gurultuyle patlar: ORM'in SELECT'i her sutunu sayar, o
+# tabloya giden her sorgu hata verir. Eksik bir INDEKS ise SESSIZ - hicbir sey
+# patlamaz, tablo buyudukce sorgular yavaslar, ve aylar sonra sebebini bulmak
+# cok daha zordur. Bu yuzden ayni self-heal indeksler icin de gerekiyor.
+
+FETCH_LOG_INDEKSLERI = {
+    "ix_fetch_log_symbol_timeframe_status_finished",
+    "ix_fetch_log_finished_at",
+}
+
+
+def _index_names(engine, table_name):
+    return {index["name"] for index in inspect(engine).get_indexes(table_name)}
+
+
+def test_create_all_tables_yeni_veritabaninda_indeksleri_kurar():
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    assert FETCH_LOG_INDEKSLERI <= _index_names(engine, "fetch_log")
+
+
+def test_sync_missing_indexes_eski_veritabanina_eksik_indeksi_ekler():
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    # Indeksler eklenmeden once deploy edilmis bir veritabanini taklit et.
+    with engine.begin() as connection:
+        for ad in FETCH_LOG_INDEKSLERI:
+            connection.execute(text("DROP INDEX %s" % ad))
+    assert not (FETCH_LOG_INDEKSLERI & _index_names(engine, "fetch_log"))
+
+    eklenen = sync_missing_indexes(engine)
+
+    assert FETCH_LOG_INDEKSLERI <= set(eklenen)
+    assert FETCH_LOG_INDEKSLERI <= _index_names(engine, "fetch_log")
+
+
+def test_sync_missing_indexes_ikinci_kosuda_hicbir_sey_yapmaz():
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    assert sync_missing_indexes(engine) == []
+
+
+def test_sync_missing_indexes_tek_indeks_patlarsa_boot_devam_eder():
+    # Calismayan bir indeks servisin acilmasini engellememeli: onsuz da
+    # calisir, sadece daha yavas.
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    with engine.begin() as connection:
+        connection.execute(text("DROP INDEX ix_fetch_log_finished_at"))
+
+    class _PatlayanIndeks:
+        name = "ix_fetch_log_finished_at"
+
+        def create(self, bind=None):
+            raise RuntimeError("indeks kurulamadi")
+
+    tablo = next(t for ad, t in __import__("src.db.base", fromlist=["Base"])
+                 .Base.metadata.tables.items() if ad == "fetch_log")
+    gercek = set(tablo.indexes)
+    tablo.indexes = {i for i in gercek if i.name != "ix_fetch_log_finished_at"}
+    tablo.indexes.add(_PatlayanIndeks())
+    try:
+        assert sync_missing_indexes(engine) == []      # hata yuttu, patlamadi
+    finally:
+        tablo.indexes = gercek
