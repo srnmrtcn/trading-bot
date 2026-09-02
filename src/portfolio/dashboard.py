@@ -6,7 +6,8 @@ from decimal import Decimal
 
 from src.db.models import PortfolioPosition, PortfolioSnapshot
 from src.portfolio.book import portfolio_equity
-from src.portfolio.config import STARTING_EQUITY, STRATEGY_VERSION
+from src.portfolio.config import REBALANCE_DAYS, STARTING_EQUITY, STRATEGY_VERSION
+from src.timeutil import utc_now
 
 EQUITY_HISTORY_LIMIT = 50
 
@@ -45,6 +46,30 @@ class BookPerformance:
     funding_cost: Decimal
     long_leg: LegPerformance
     short_leg: LegPerformance
+    as_of: datetime
+
+    @property
+    def days_since_rebalance(self) -> int | None:
+        if self.last_rebalance is None:
+            return None
+        return (self.as_of - self.last_rebalance).days
+
+    @property
+    def rebalance_overdue(self) -> bool:
+        """A rebalance that was due yesterday and still has not happened.
+
+        This is the state the first live night produced and nothing showed: the
+        job ran, found no daily bars, correctly refused to spend the week, and
+        left an empty book behind. An empty book on the page looks the same
+        whether the strategy is between rebalances or has been unable to open
+        for a fortnight.
+
+        One day of slack, deliberately. The rebalance runs in the small hours
+        and the page is read at any hour, so a book rebalanced exactly seven
+        days ago is normal, not late.
+        """
+        days = self.days_since_rebalance
+        return days is not None and days > REBALANCE_DAYS
 
     @property
     def return_pct(self) -> Decimal:
@@ -88,7 +113,7 @@ def open_book(session) -> list:
     )
 
 
-def book_performance(session) -> BookPerformance:
+def book_performance(session, now: datetime | None = None) -> BookPerformance:
     """Headline numbers for the book, plus each leg on its own.
 
     Every query filters on STRATEGY_VERSION. The paper path and the book share
@@ -98,6 +123,7 @@ def book_performance(session) -> BookPerformance:
     a row with an unexpected direction shows up as a mismatch between the two
     leg lines and the totals instead of being silently folded into one side.
     """
+    now = now if now is not None else utc_now()
     snapshots = (
         session.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION)
@@ -135,4 +161,5 @@ def book_performance(session) -> BookPerformance:
         funding_cost=sum((row.funding_cost or zero for row in closed), zero),
         long_leg=leg("long"),
         short_leg=leg("short"),
+        as_of=now,
     )

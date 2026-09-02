@@ -75,8 +75,15 @@
       <p class="sub">
         Son denge:
         {%- if book.last_rebalance %} {{ book.last_rebalance.strftime("%Y-%m-%d %H:%M") }}
+          ({{ book.days_since_rebalance }} gün önce)
         {%- else %} henüz yok{% endif %}
       </p>
+      {# Bos bir defter, iki bambaska durumda ayni goruniyor: dengeler arasinda
+         olmak ve iki haftadir acilamiyor olmak. Ilk canli gecede olan ikincisiydi
+         ve sayfada hicbir iz birakmadi. #}
+      {% if book.rebalance_overdue %}
+      <p class="sub down">Denge gecikti — açılamıyor olabilir, logdaki uyarıya bak.</p>
+      {% endif %}
     </div>
     <div>
       <p class="sub">Kapanan pozisyon: {{ book.closed }}</p>

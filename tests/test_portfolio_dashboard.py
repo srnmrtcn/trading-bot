@@ -191,3 +191,38 @@ def test_book_performance_bacaklar_baska_surumu_almaz(db_session):
         funding_cost=Decimal(0), realized_pnl=Decimal(999)))
     session.commit()
     assert book_performance(session).long_leg.gross_pnl == Decimal(0)
+
+
+# --- gecikmis denge gorunur olsun -------------------------------------------
+# Ilk canli gecede is kostu, defteri acamadi, dogru sekilde haftayi harcamadi
+# ve geriye bos bir defter birakti. Sayfada bu, "dengeler arasindayiz"den
+# ayirt edilemiyordu.
+
+def test_book_performance_son_dengeden_bu_yana_gecen_gun(db_session):
+    _snapshot(db_session, 0, 10500)
+    db_session.commit()
+    p = book_performance(db_session, now=NOW + timedelta(days=3))
+    assert p.days_since_rebalance == 3
+    assert p.rebalance_overdue is False
+
+
+def test_book_performance_hic_denge_yoksa_gun_yok(db_session):
+    p = book_performance(db_session, now=NOW)
+    assert p.days_since_rebalance is None
+    assert p.rebalance_overdue is False
+
+
+def test_book_performance_tam_yedi_gun_gecikmis_sayilmaz(db_session):
+    # Denge gecenin bir yarisi kosuyor, sayfa her saat okunabiliyor: tam yedi
+    # gun once dengelenmis bir defter gec degil, zamaninda.
+    _snapshot(db_session, 0, 10500)
+    db_session.commit()
+    assert book_performance(db_session, now=NOW + timedelta(days=7)).rebalance_overdue is False
+
+
+def test_book_performance_sekiz_gun_gecikmis_sayilir(db_session):
+    _snapshot(db_session, 0, 10500)
+    db_session.commit()
+    p = book_performance(db_session, now=NOW + timedelta(days=8))
+    assert p.days_since_rebalance == 8
+    assert p.rebalance_overdue is True

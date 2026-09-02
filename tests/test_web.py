@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -136,6 +136,32 @@ def test_dashboard_shows_each_leg_separately(db_session):
     # Net toplam +20; iki bacagin -310 ve +330 oldugu bilgisi olmadan bu rakam
     # "sakin bir hafta" gibi okunur.
     assert "20.00" in kart
+
+
+def test_dashboard_warns_when_a_rebalance_is_overdue(db_session):
+    # Bos defter iki durumda ayni goruniyor: dengeler arasinda olmak, ve
+    # haftalardir acilamiyor olmak. Ikincisi ilk canli gecede oldu ve sayfada
+    # hicbir iz birakmadi.
+    db_session.add(PortfolioSnapshot(
+        strategy_version=STRATEGY_VERSION,
+        as_of=utc_now() - timedelta(days=12), equity=Decimal("10500"),
+    ))
+    db_session.commit()
+
+    body = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD)).get_data(as_text=True)
+    assert "Denge gecikti" in body
+    assert "12 gün önce" in body
+
+
+def test_dashboard_does_not_warn_between_rebalances(db_session):
+    db_session.add(PortfolioSnapshot(
+        strategy_version=STRATEGY_VERSION,
+        as_of=utc_now() - timedelta(days=2), equity=Decimal("10500"),
+    ))
+    db_session.commit()
+
+    body = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD)).get_data(as_text=True)
+    assert "Denge gecikti" not in body
 
 
 def test_dashboard_book_does_not_borrow_the_paper_path_equity(db_session):
