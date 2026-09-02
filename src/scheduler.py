@@ -15,6 +15,8 @@ from src.integrity import floor_to_timeframe
 from src.kline_fetcher import process_symbol_timeframe
 from src.learning_runner import run_learning_cycle
 from src.paper_trading_runner import run_paper_trading_cycle
+from src.portfolio.bars import refresh_futures_daily
+from src.portfolio.rebalancer import run_rebalance
 from src.scenario_runner import run_scenario_generation
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
@@ -266,14 +268,36 @@ def run_futures_daily_job(session_factory, binance_client, now: datetime = None)
     """
     Run the daily futures kline refresh job.
     """
-    raise NotImplementedError
+    session = session_factory()
+    try:
+        written = refresh_futures_daily(session, binance_client, now)
+        logger.info("Futures daily bars refreshed: %d rows written", written)
+    except Exception:
+        session.rollback()
+        logger.exception("Futures daily bar refresh failed")
+    finally:
+        session.close()
 
 
 def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
     """
     Run the portfolio rebalance job.
     """
-    raise NotImplementedError
+    session = session_factory()
+    try:
+        result = run_rebalance(session, now)
+        if result.acted:
+            logger.info(
+                "Portfolio rebalanced: %d closed, %d opened, universe %d, equity %s",
+                result.closed, result.opened, result.universe, result.equity,
+            )
+        else:
+            logger.debug("Portfolio rebalance not due yet")
+    except Exception:
+        session.rollback()
+        logger.exception("Portfolio rebalance failed")
+    finally:
+        session.close()
 
 
 def build_scheduler(session_factory, binance_client) -> BackgroundScheduler:

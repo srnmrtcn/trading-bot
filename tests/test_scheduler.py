@@ -87,7 +87,8 @@ def _kline(symbol, timeframe, open_time, close="1"):
 def test_build_scheduler_registers_expected_jobs():
     scheduler = build_scheduler(session_factory=lambda: None, binance_client=None)
     job_ids = {job.id for job in scheduler.get_jobs()}
-    assert job_ids == {"hourly_klines", "daily_klines", "symbol_refresh"}
+    assert job_ids == {"hourly_klines", "daily_klines", "symbol_refresh",
+                       "futures_daily_bars", "portfolio_rebalance"}
 
 
 def test_run_timeframe_job_fetches_active_symbols_and_records_log(db_session):
