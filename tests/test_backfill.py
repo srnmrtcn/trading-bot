@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -150,3 +151,85 @@ def test_run_gap_backfill_repairs_single_candle_gap_through_real_client(db_sessi
     assert results[0].fetched >= 1
     stored = {row.open_time for row in db_session.query(Kline).filter(Kline.symbol == "BTCUSDT").all()}
     assert hours[1] in stored, "the single missing candle was never fetched"
+
+
+# --- bir kosuda doldurulacak bosluk sayisi sinirli --------------------------
+# Bosluklarin cogu ilk denemede kapanir. Kapanmayanlar KALICIDIR: Binance'te o
+# aralik icin gercekten mum yoktur (islem gormeyen bir cift, bir borsa duraksi),
+# fetch basarili doner, hicbir sey yazilmaz ve ayni bosluk bir sonraki kosuda
+# yine bulunur - sonsuza kadar. Sinirsizken bunlarin her biri servisin omru
+# boyunca sembol basina kosu basina bir API cagrisina mal olur; saatlik is zaten
+# bes yuze yakin sembol dolasiyor ve 24 dakika suruyor.
+
+def _bosluklu_seri(session, sembol, saatler_var):
+    for saat in saatler_var:
+        session.add(_kline(sembol, "1h", datetime(2026, 1, 1, saat)))
+    session.commit()
+
+
+def _sayan_fetch(calls):
+    def fake(session, client, symbol, timeframe, start_ms, end_ms):
+        calls.append((start_ms, end_ms))
+        return FetchResult(symbol=symbol, timeframe=timeframe,
+                           fetched=0, inserted=0, updated=0, flagged=0)
+    return fake
+
+
+def test_run_gap_backfill_bir_kosuda_en_fazla_max_gaps_doldurur(db_session):
+    # 0,2,4,6,8,10 saatleri var -> aralarinda 5 tek mumluk bosluk; sinir 2.
+    _bosluklu_seri(db_session, "CAPUSDT", [0, 2, 4, 6, 8, 10])
+    calls = []
+    with patch.object(backfill_module, "process_symbol_timeframe",
+                      side_effect=_sayan_fetch(calls)):
+        results = backfill_module.run_gap_backfill(
+            db_session, binance_client=object(), symbol="CAPUSDT", timeframe="1h",
+            range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 10),
+            max_gaps=2,
+        )
+    assert len(calls) == 2
+    assert len(results) == 2
+
+
+def test_run_gap_backfill_once_en_YENI_bosluklari_doldurur(db_session):
+    # Eski bir bosluk kalici olabilir; onu once denemek, bu haftanin verisini
+    # sonsuza kadar bekletirdi. Her sinyal en yeni mumlari okuyor.
+    _bosluklu_seri(db_session, "CAPUSDT", [0, 2, 4, 6, 8, 10])
+    calls = []
+    with patch.object(backfill_module, "process_symbol_timeframe",
+                      side_effect=_sayan_fetch(calls)):
+        backfill_module.run_gap_backfill(
+            db_session, binance_client=object(), symbol="CAPUSDT", timeframe="1h",
+            range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 10),
+            max_gaps=2,
+        )
+    eksik = [datetime(2026, 1, 1, 9), datetime(2026, 1, 1, 7)]
+    assert [baslangic for baslangic, _ in calls] == [to_epoch_ms(t) for t in eksik]
+
+
+def test_run_gap_backfill_sinira_takilinca_uyarir(db_session, caplog):
+    _bosluklu_seri(db_session, "CAPUSDT", [0, 2, 4, 6, 8, 10])
+    with patch.object(backfill_module, "process_symbol_timeframe",
+                      side_effect=_sayan_fetch([])):
+        with caplog.at_level(logging.WARNING, logger="backfill"):
+            backfill_module.run_gap_backfill(
+                db_session, binance_client=object(), symbol="CAPUSDT", timeframe="1h",
+                range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 10),
+                max_gaps=2,
+            )
+    uyarilar = [k.getMessage() for k in caplog.records if k.levelno == logging.WARNING]
+    assert len(uyarilar) == 1
+    assert "CAPUSDT" in uyarilar[0]
+    assert "3 left for later runs" in uyarilar[0]
+
+
+def test_run_gap_backfill_sinirin_altinda_uyarmaz(db_session, caplog):
+    _bosluklu_seri(db_session, "CAPUSDT", [0, 2, 4])
+    with patch.object(backfill_module, "process_symbol_timeframe",
+                      side_effect=_sayan_fetch([])):
+        with caplog.at_level(logging.WARNING, logger="backfill"):
+            backfill_module.run_gap_backfill(
+                db_session, binance_client=object(), symbol="CAPUSDT", timeframe="1h",
+                range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 4),
+                max_gaps=5,
+            )
+    assert [k for k in caplog.records if k.levelno == logging.WARNING] == []

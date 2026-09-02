@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 
 from src.db.models import Kline
 from src.integrity import TIMEFRAME_DELTAS, detect_gaps
 from src.kline_fetcher import process_symbol_timeframe
 from src.timeutil import DEFAULT_BACKFILL_DAYS, to_epoch_ms, utc_now
+
+logger = logging.getLogger("backfill")
+
+# Most gaps close on the first attempt. The ones that do not are permanent:
+# Binance genuinely has no candles for an illiquid pair's quiet hour or for an
+# exchange halt, so the fetch succeeds, returns nothing, and the same gap is
+# detected again on the next run -- forever. Uncapped, each of those costs one
+# API call per symbol per run for the life of the service, and the hourly job
+# already walks close to five hundred symbols.
+#
+# The cap bounds that. Real gaps still close, one run at a time; a symbol with
+# more than this many is reported rather than silently absorbed.
+MAX_GAPS_PER_RUN = 5
 
 
 def run_initial_backfill(session, binance_client, symbols: list, timeframes: list, since_days: int = DEFAULT_BACKFILL_DAYS) -> list:
@@ -25,7 +39,7 @@ def run_initial_backfill(session, binance_client, symbols: list, timeframes: lis
     return results
 
 
-def run_gap_backfill(session, binance_client, symbol: str, timeframe: str, range_start: datetime, range_end: datetime) -> list:
+def run_gap_backfill(session, binance_client, symbol: str, timeframe: str, range_start: datetime, range_end: datetime, max_gaps: int = MAX_GAPS_PER_RUN) -> list:
     existing_times = [
         row.open_time for row in
         session.query(Kline.open_time)
@@ -34,6 +48,21 @@ def run_gap_backfill(session, binance_client, symbol: str, timeframe: str, range
         .all()
     ]
     gaps = detect_gaps(existing_times, timeframe, range_start, range_end)
+
+    if len(gaps) > max_gaps:
+        # Newest first, not oldest. Either order can starve the other end when a
+        # gap is unfillable, and recent candles are the ones every signal reads;
+        # an ancient hole must never be allowed to block this week's data.
+        # The warning is the part that matters: a symbol that keeps reporting
+        # skipped gaps is telling us its permanent gaps need recording as
+        # known-empty, which this cap deliberately does not attempt.
+        skipped = len(gaps) - max_gaps
+        gaps = sorted(gaps, key=lambda gap: gap.start, reverse=True)[:max_gaps]
+        logger.warning(
+            "%s %s has more gaps than one run repairs: filling the %d newest, "
+            "%d left for later runs",
+            symbol, timeframe, max_gaps, skipped,
+        )
 
     step = TIMEFRAME_DELTAS[timeframe]
     results = []
