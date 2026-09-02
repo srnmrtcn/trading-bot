@@ -291,8 +291,21 @@ def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
                 "Portfolio rebalanced: %d closed, %d opened, universe %d, equity %s",
                 result.closed, result.opened, result.universe, result.equity,
             )
-        else:
+        elif result.reason == "not_due":
             logger.debug("Portfolio rebalance not due yet")
+        else:
+            # Due, and could not act. This is the failure that hides: the job
+            # runs, returns in a second, exits zero, and the book never opens.
+            # It happened on the first live night -- a redeploy at 00:44 meant
+            # the 00:40 bar job never ran, so 00:50 had nothing to rank -- and
+            # left no trace above debug. The symbol count separates the two
+            # causes: 0 means the bars did not arrive, a large number with an
+            # empty universe means they did and nothing cleared the filters.
+            logger.warning(
+                "Portfolio rebalance was due but could not act: "
+                "%d symbols with daily bars, %d eligible names. Retrying tomorrow.",
+                result.symbols, result.universe,
+            )
     except Exception:
         session.rollback()
         logger.exception("Portfolio rebalance failed")

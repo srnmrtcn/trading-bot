@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -115,3 +116,54 @@ def test_build_scheduler_mumlar_dengeden_once():
     denge = str(jobs['portfolio_rebalance'].trigger)
     assert "minute='40'" in mumlar
     assert "minute='50'" in denge
+
+
+# --- acted=False'in iki yuzu -------------------------------------------
+# Ilk canli gecede is 00:50'de kostu, 1.15 saniyede bitti, sifir dondurdu ve
+# defteri hic acmadi: 00:44'teki deploy yuzunden 00:40'taki bar isi hic
+# calismamisti. Loglarda debug'in ustunde tek iz yoktu. "Sirasi degildi" ile
+# "sirasiydi ama acamadim" ayni sessiz dala dusuyordu; ikincisi her gun
+# tekrarlanabilir ve haftalarca fark edilmez.
+
+def test_run_rebalance_bar_yoksa_no_book_der(db_session):
+    sonuc = run_rebalance(db_session, NOW)
+    assert sonuc.acted is False
+    assert sonuc.reason == 'no_book'
+    assert sonuc.symbols == 0          # barlar hic gelmedi
+
+
+def test_run_rebalance_barlar_var_ama_likit_degilse_no_book_der(db_session):
+    for i in range(20):
+        ad = 'S%02d' % i
+        _sembol(db_session, ad)
+        _mumlar(db_session, ad, 0.010 - i * 0.0008, dolar=Decimal(1000000))
+    db_session.commit()
+    sonuc = run_rebalance(db_session, NOW)
+    assert sonuc.acted is False
+    assert sonuc.reason == 'no_book'
+    assert sonuc.symbols == 20         # barlar burada, gecen isim yok
+    assert sonuc.universe == 0
+
+
+def test_run_rebalance_sirasi_gelmediyse_not_due_der(db_session):
+    _evren(db_session)
+    assert run_rebalance(db_session, NOW).acted is True
+    sonuc = run_rebalance(db_session, NOW + timedelta(days=1))
+    assert sonuc.acted is False
+    assert sonuc.reason == 'not_due'
+
+
+def test_rebalance_isi_acamadiysa_uyarir(db_session, caplog):
+    with caplog.at_level(logging.WARNING, logger='src.scheduler'):
+        run_portfolio_rebalance_job(lambda: db_session, NOW)
+    uyarilar = [k for k in caplog.records if k.levelno == logging.WARNING]
+    assert len(uyarilar) == 1
+    assert 'could not act' in uyarilar[0].getMessage()
+
+
+def test_rebalance_isi_sirasi_gelmediyse_uyarmaz(db_session, caplog):
+    _evren(db_session)
+    run_portfolio_rebalance_job(lambda: db_session, NOW)
+    with caplog.at_level(logging.WARNING, logger='src.scheduler'):
+        run_portfolio_rebalance_job(lambda: db_session, NOW + timedelta(days=1))
+    assert [k for k in caplog.records if k.levelno == logging.WARNING] == []

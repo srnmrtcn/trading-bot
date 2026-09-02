@@ -80,6 +80,17 @@ class RebalanceResult:
     opened: int
     equity: Decimal
     universe: int
+    # Why the run ended the way it did. acted=False has two causes that look
+    # identical from outside and could not be more different: "not_due" is the
+    # normal answer on six days out of seven, while "no_book" means the run WAS
+    # due and could not act. The second is a silent outage -- the book simply
+    # never opens -- so the caller has to be able to tell them apart in order
+    # to keep quiet about one and complain about the other.
+    reason: str = "ok"
+    # How many symbols had daily bars at all. Separates "the bars never
+    # arrived" (0) from "the bars are here but too few names clear the
+    # liquidity floor" (many, with universe 0).
+    symbols: int = 0
 
 
 def run_rebalance(session, now: datetime = None) -> RebalanceResult:
@@ -89,7 +100,7 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     now = now if now is not None else utc_now()
     equity = portfolio_equity(session)
     if not is_rebalance_due(session, now):
-        return RebalanceResult(False, 0, 0, equity, 0)
+        return RebalanceResult(False, 0, 0, equity, 0, "not_due")
 
     history = LIQUIDITY_WINDOW_DAYS + max(LOOKBACK_DAYS) + SIGNAL_SKIP_DAYS + 2
     bars = load_daily_bars(session, now, history)
@@ -126,7 +137,9 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
         # there was no universe to rank. That is a data outage lasting minutes,
         # and it would have cost a week of trading. A book that legitimately
         # has too few eligible names simply retries tomorrow, which is cheap.
-        return RebalanceResult(False, 0, 0, equity, universe)
+        return RebalanceResult(False, 0, 0, equity, universe, "no_book",
+                              len(bars))
 
     record_snapshot(session, now, equity, closed, opened)
-    return RebalanceResult(True, closed, opened, equity, universe)
+    return RebalanceResult(True, closed, opened, equity, universe, "ok",
+                           len(bars))
