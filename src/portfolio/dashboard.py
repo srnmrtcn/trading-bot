@@ -12,6 +12,28 @@ EQUITY_HISTORY_LIMIT = 50
 
 
 @dataclass
+class LegPerformance:
+    """One side of the book, on its own.
+
+    The four-year measurement found the two legs take turns: in 2023-2024 the
+    long leg carried the book and the short leg lost money, in 2025-2026 the
+    reverse. A single net figure hides that -- one leg earning while the other
+    gives back the same amount looks identical to both legs being dead, and
+    those two states call for opposite responses. Same reason gross, fees and
+    funding are already three separate lines rather than one.
+    """
+    closed: int
+    gross_pnl: Decimal
+    fee_cost: Decimal
+    funding_cost: Decimal
+
+    @property
+    def net_pnl(self) -> Decimal:
+        # funding_cost is a COST: negative means the leg collected funding.
+        return self.gross_pnl - self.fee_cost - self.funding_cost
+
+
+@dataclass
 class BookPerformance:
     equity: Decimal
     rebalances: int
@@ -21,6 +43,8 @@ class BookPerformance:
     gross_pnl: Decimal
     fee_cost: Decimal
     funding_cost: Decimal
+    long_leg: LegPerformance
+    short_leg: LegPerformance
 
     @property
     def return_pct(self) -> Decimal:
@@ -65,42 +89,14 @@ def open_book(session) -> list:
 
 
 def book_performance(session) -> BookPerformance:
-    """
-    Once dosyaya su dataclass eklenir:
-    @dataclass
-    class BookPerformance:
-        equity: Decimal
-        rebalances: int
-        last_rebalance: datetime | None
-        closed: int
-        wins: int
-        gross_pnl: Decimal
-        fee_cost: Decimal
-        funding_cost: Decimal
+    """Headline numbers for the book, plus each leg on its own.
 
-        @property
-        def return_pct(self) -> Decimal:
-            return (self.equity / STARTING_EQUITY - 1) * 100
+    Every query filters on STRATEGY_VERSION. The paper path and the book share
+    a database, and a summary that summed them would describe neither.
 
-        @property
-        def win_rate(self) -> Decimal:
-            if not self.closed:
-                return Decimal(0)
-            return Decimal(self.wins) * 100 / Decimal(self.closed)
-
-    Fonksiyon SIRAYLA:
-      1. snapshots = PortfolioSnapshot, strategy_version suzulur, order_by(as_of.desc(), id.desc()), .all()
-      2. closed = PortfolioPosition, status == 'closed' VE strategy_version suzulur VE realized_pnl.isnot(None), .all()
-      3. zero = Decimal(0)
-      4. BookPerformance dondurulur:
-           equity=portfolio_equity(session)
-           rebalances=len(snapshots)
-           last_rebalance=snapshots[0].as_of if snapshots else None
-           closed=len(closed)
-           wins=realized_pnl > 0 olanlarin sayisi
-           gross_pnl=sum((row.gross_pnl or zero for row in closed), zero)
-           fee_cost=sum((row.fee_cost or zero for row in closed), zero)
-           funding_cost=sum((row.funding_cost or zero for row in closed), zero)
+    The legs are selected by direction rather than derived by subtraction, so
+    a row with an unexpected direction shows up as a mismatch between the two
+    leg lines and the totals instead of being silently folded into one side.
     """
     snapshots = (
         session.query(PortfolioSnapshot)
@@ -118,6 +114,16 @@ def book_performance(session) -> BookPerformance:
         .all()
     )
     zero = Decimal(0)
+
+    def leg(direction: str) -> LegPerformance:
+        rows = [row for row in closed if row.direction == direction]
+        return LegPerformance(
+            closed=len(rows),
+            gross_pnl=sum((row.gross_pnl or zero for row in rows), zero),
+            fee_cost=sum((row.fee_cost or zero for row in rows), zero),
+            funding_cost=sum((row.funding_cost or zero for row in rows), zero),
+        )
+
     return BookPerformance(
         equity=portfolio_equity(session),
         rebalances=len(snapshots),
@@ -127,4 +133,6 @@ def book_performance(session) -> BookPerformance:
         gross_pnl=sum((row.gross_pnl or zero for row in closed), zero),
         fee_cost=sum((row.fee_cost or zero for row in closed), zero),
         funding_cost=sum((row.funding_cost or zero for row in closed), zero),
+        long_leg=leg("long"),
+        short_leg=leg("short"),
     )

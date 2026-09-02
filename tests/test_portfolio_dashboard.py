@@ -124,3 +124,70 @@ def test_open_book_baska_surumu_alma(db_session):
     db_session.commit()
     result = [p.symbol for p in open_book(db_session)]
     assert result == ['AAAUSDT']
+
+
+# --- bacak bazinda ayrim -----------------------------------------------
+# Dort yillik olcum defterin iki bacaginin DONUSUMLU calistigini gosterdi:
+# 2023-2024'te uzun bacak tasidi ve kisa bacak kaybetti, 2025-2026'da tam
+# tersi. Tek bir net rakam bunu gizler - bir bacak kazanip digeri ayni kadar
+# kaybederken defter "duz" gorunur ve bu, iki bacagin da olu oldugu durumdan
+# ayirt edilemez. Ayni sebeple brut/ucret/funding zaten ayri duruyor.
+
+def _bacak_pozisyonu(session, sembol, yon, brut, ucret, funding):
+    session.add(PortfolioPosition(
+        strategy_version=STRATEGY_VERSION, symbol=sembol, direction=yon,
+        entry_price=Decimal(100), position_size=Decimal(2),
+        opened_at=NOW, status='closed',
+        gross_pnl=Decimal(brut), fee_cost=Decimal(ucret),
+        funding_cost=Decimal(funding),
+        realized_pnl=Decimal(brut) - Decimal(ucret) - Decimal(funding)))
+
+
+def test_book_performance_bacaklari_ayri_toplar(db_session):
+    _bacak_pozisyonu(db_session, 'AAAUSDT', 'long', 30, 2, -5)   # funding TAHSIL
+    _bacak_pozisyonu(db_session, 'BBBUSDT', 'long', 10, 1, -3)
+    _bacak_pozisyonu(db_session, 'CCCUSDT', 'short', -10, 3, 4)  # funding ODENDI
+    db_session.commit()
+    p = book_performance(db_session)
+
+    assert p.long_leg.closed == 2
+    assert p.long_leg.gross_pnl == Decimal(40)
+    assert p.long_leg.fee_cost == Decimal(3)
+    assert p.long_leg.funding_cost == Decimal(-8)
+    assert p.long_leg.net_pnl == Decimal(45)
+
+    assert p.short_leg.closed == 1
+    assert p.short_leg.gross_pnl == Decimal(-10)
+    assert p.short_leg.net_pnl == Decimal(-17)
+
+
+def test_book_performance_bacak_toplamlari_genel_toplamla_uyusur(db_session):
+    _bacak_pozisyonu(db_session, 'AAAUSDT', 'long', 30, 2, -5)
+    _bacak_pozisyonu(db_session, 'CCCUSDT', 'short', -10, 3, 4)
+    db_session.commit()
+    p = book_performance(db_session)
+    # Bir bacak sessizce dusseydi (ornegin beklenmeyen bir direction degeri)
+    # panodaki iki satir toplami karta yazilan brut rakamla tutmazdi.
+    assert p.long_leg.gross_pnl + p.short_leg.gross_pnl == p.gross_pnl
+    assert p.long_leg.fee_cost + p.short_leg.fee_cost == p.fee_cost
+    assert p.long_leg.funding_cost + p.short_leg.funding_cost == p.funding_cost
+    assert p.long_leg.closed + p.short_leg.closed == p.closed
+
+
+def test_book_performance_bos_defterde_bacaklar_sifir(db_session):
+    p = book_performance(db_session)
+    for bacak in (p.long_leg, p.short_leg):
+        assert bacak.closed == 0
+        assert bacak.gross_pnl == Decimal(0)
+        assert bacak.net_pnl == Decimal(0)
+
+
+def test_book_performance_bacaklar_baska_surumu_almaz(db_session):
+    session = db_session
+    session.add(PortfolioPosition(
+        strategy_version='baska-surum', symbol='ZZZUSDT', direction='long',
+        entry_price=Decimal(100), position_size=Decimal(2), opened_at=NOW,
+        status='closed', gross_pnl=Decimal(999), fee_cost=Decimal(0),
+        funding_cost=Decimal(0), realized_pnl=Decimal(999)))
+    session.commit()
+    assert book_performance(session).long_leg.gross_pnl == Decimal(0)

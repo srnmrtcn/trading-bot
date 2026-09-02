@@ -108,6 +108,36 @@ def test_dashboard_shows_the_momentum_book(db_session):
     assert "11500.00" in body
 
 
+def test_dashboard_shows_each_leg_separately(db_session):
+    # The two legs take turns -- the long leg carried the book in 2023-2024 and
+    # the short leg in 2025-2026. A book whose legs cancel out reads as "flat"
+    # in the net figure and is indistinguishable there from a book whose legs
+    # are both dead, so the page has to show them apart.
+    def _closed(symbol, direction, gross, fee, funding):
+        db_session.add(PortfolioPosition(
+            strategy_version=STRATEGY_VERSION, symbol=symbol, direction=direction,
+            entry_price=Decimal("100"), position_size=Decimal("2"),
+            opened_at=datetime(2026, 1, 1), closed_at=datetime(2026, 1, 8),
+            exit_price=Decimal("110"), status="closed",
+            gross_pnl=Decimal(gross), fee_cost=Decimal(fee),
+            funding_cost=Decimal(funding),
+            realized_pnl=Decimal(gross) - Decimal(fee) - Decimal(funding),
+        ))
+
+    _closed("AAAUSDT", "long", 300, 20, -50)     # kazanan bacak, funding tahsil
+    _closed("BBBUSDT", "short", -280, 20, 10)    # kaybeden bacak
+    db_session.commit()
+
+    body = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD)).get_data(as_text=True)
+    kart = body.split("Defterdeki Pozisyonlar")[0]
+
+    assert "+330.00" in kart          # long: 300 - 20 - (-50)
+    assert "-310.00" in kart          # short: -280 - 20 - 10
+    # Net toplam +20; iki bacagin -310 ve +330 oldugu bilgisi olmadan bu rakam
+    # "sakin bir hafta" gibi okunur.
+    assert "20.00" in kart
+
+
 def test_dashboard_book_does_not_borrow_the_paper_path_equity(db_session):
     # Both strategies keep an equity figure. Rendering one under the other's
     # heading would be invisible in the numbers and wrong in every conclusion

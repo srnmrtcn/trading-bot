@@ -91,6 +91,29 @@
       <p class="sub">Funding: {{ "%.2f"|format(book.funding_cost) }}</p>
     </div>
   </div>
+  {# Bacaklar ayrı duruyor çünkü dört yıllık ölçüm ikisinin DÖNÜŞÜMLÜ
+     çalıştığını gösterdi: 2023-2024'te uzun bacak taşıdı ve kısa bacak
+     kaybetti, 2025-2026'da tam tersi. Tek bir net rakamda, bir bacağın
+     kazanıp diğerinin aynı kadar kaybettiği hafta, iki bacağın da ölü olduğu
+     haftadan ayırt edilemez — ve bu ikisi zıt tepki gerektirir. #}
+  <table class="legs">
+    <tr>
+      <th>Bacak</th><th>Kapanan</th><th>Brüt</th><th>Komisyon</th>
+      <th>Funding (− = tahsil)</th><th>Net</th>
+    </tr>
+    {% for ad, bacak in [("long", book.long_leg), ("short", book.short_leg)] %}
+    <tr>
+      <td class="{{ ad }}">{{ ad }}</td>
+      <td>{{ bacak.closed }}</td>
+      <td>{{ "%.2f"|format(bacak.gross_pnl) }}</td>
+      <td>{{ "%.2f"|format(bacak.fee_cost) }}</td>
+      <td>{{ "%.2f"|format(bacak.funding_cost) }}</td>
+      <td class="{{ 'up' if bacak.net_pnl >= 0 else 'down' }}">
+        {{ "%+.2f"|format(bacak.net_pnl) }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
 </div>
 
 <div class="card">
