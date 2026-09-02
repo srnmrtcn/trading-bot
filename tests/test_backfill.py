@@ -233,3 +233,69 @@ def test_run_gap_backfill_sinirin_altinda_uyarmaz(db_session, caplog):
                 max_gaps=5,
             )
     assert [k for k in caplog.records if k.levelno == logging.WARNING] == []
+
+
+# --- tam pencerede tarama hic yapilmasin -------------------------------------
+# Olculdu: saatlik is 489 sembolde 1461 saniye suruyor ve bunun 348 saniyesi
+# bosluk taramasi - sifir bosluk doldurarak. Saglikli bir veritabaninda dogru
+# cevap zaten "eksik yok"; onu ogrenmek icin sembol basina 720 zaman damgasini
+# Python'a cekmek, ucuz bir soruyu pahali yoldan sormak.
+
+def test_run_gap_backfill_tam_pencerede_taramaya_hic_girmez(db_session):
+    for saat in range(5):
+        db_session.add(_kline("FULLUSDT", "1h", datetime(2026, 1, 1, saat)))
+    db_session.commit()
+
+    def _patlayan_detect(*args, **kwargs):
+        raise AssertionError("tam pencerede detect_gaps cagrilmamali")
+
+    with patch.object(backfill_module, "detect_gaps", side_effect=_patlayan_detect):
+        sonuc = backfill_module.run_gap_backfill(
+            db_session, binance_client=object(), symbol="FULLUSDT", timeframe="1h",
+            range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 4),
+        )
+    assert sonuc == []
+
+
+def test_run_gap_backfill_eksik_varsa_hala_bulur(db_session):
+    # Hizli yol yalnizca TAM pencerede kisa devre yapmali; bir mum eksikse
+    # normal tarama calismali.
+    for saat in (0, 1, 3, 4):
+        db_session.add(_kline("HOLEUSDT", "1h", datetime(2026, 1, 1, saat)))
+    db_session.commit()
+
+    calls = []
+
+    def fake(session, client, symbol, timeframe, start_ms, end_ms):
+        calls.append((start_ms, end_ms))
+        return FetchResult(symbol=symbol, timeframe=timeframe,
+                           fetched=0, inserted=0, updated=0, flagged=0)
+
+    with patch.object(backfill_module, "process_symbol_timeframe", side_effect=fake):
+        backfill_module.run_gap_backfill(
+            db_session, binance_client=object(), symbol="HOLEUSDT", timeframe="1h",
+            range_start=datetime(2026, 1, 1, 0), range_end=datetime(2026, 1, 1, 4),
+        )
+    eksik = datetime(2026, 1, 1, 2)
+    assert calls == [(to_epoch_ms(eksik), to_epoch_ms(eksik + timedelta(hours=1)))]
+
+
+def test_window_is_complete_baska_sembolun_mumlarini_saymaz(db_session):
+    # Sayim sorgusu sembol ve timeframe'e gore suzulmezse baska bir sembolun
+    # mumlari pencereyi "tam" gosterir ve gercek bosluk sonsuza kadar gizlenir.
+    for saat in range(5):
+        db_session.add(_kline("OTHERUSDT", "1h", datetime(2026, 1, 1, saat)))
+    db_session.add(_kline("THINUSDT", "1h", datetime(2026, 1, 1, 0)))
+    db_session.commit()
+    assert backfill_module._window_is_complete(
+        db_session, "THINUSDT", "1h",
+        datetime(2026, 1, 1, 0), datetime(2026, 1, 1, 4)) is False
+
+
+def test_window_is_complete_baska_timeframe_saymaz(db_session):
+    for saat in range(5):
+        db_session.add(_kline("TFUSDT", "1d", datetime(2026, 1, 1, saat)))
+    db_session.commit()
+    assert backfill_module._window_is_complete(
+        db_session, "TFUSDT", "1h",
+        datetime(2026, 1, 1, 0), datetime(2026, 1, 1, 4)) is False

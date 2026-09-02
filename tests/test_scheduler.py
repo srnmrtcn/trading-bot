@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -705,7 +706,9 @@ def test_summary_line_reports_where_the_time_went(db_session, caplog):
 
     ekler = _timing_suffixes(caplog)
     assert len(ekler) == 1
-    for faz in ("fetch", "gap scan", "tail"):
-        assert faz in ekler[0]
-    # Saniye biciminde ve okunabilir olmali; "fetch 12s" gibi.
-    assert ekler[0].count("s,") == 2 and ekler[0].endswith("s")
+    # Dort faz kosunun TAMAMINI kapsamali. Ilk olculen kosu 1461 saniyenin
+    # yalnizca 1104'unu acikliyordu; eksik alti dakika sembol basina defter
+    # tutmaydi (resume noktasi sorgusu + fetch_log commit'i) ve olculmuyordu.
+    assert re.fullmatch(
+        r"fetch \d+s, gap scan \d+s, bookkeeping \d+s, tail \d+s", ekler[0]
+    ), ekler[0]

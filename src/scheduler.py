@@ -142,13 +142,21 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
         # the symbol loop (funding, regime, scenarios, learning, paper).
         fetch_seconds = 0.0
         gap_seconds = 0.0
+        # The first measured run accounted for only 1104 of its 1461 seconds.
+        # The missing six minutes were here: a resume-point query and a
+        # fetch_log INSERT+COMMIT per symbol, each a round trip to a Postgres
+        # that is not on this machine. Inferring that from what was left over
+        # is not the same as measuring it.
+        bookkeeping_seconds = 0.0
         for symbol in symbols:
             # Decided once, after the whole per-symbol block, so a symbol can
             # never be counted as both succeeded and failed.
             symbol_ok = False
             try:
+                _book_started = time.monotonic()
                 start = get_resume_point(session, symbol, timeframe, now=end)
                 started_at = utc_now()
+                bookkeeping_seconds += time.monotonic() - _book_started
                 _fetch_started = time.monotonic()
                 result = process_symbol_timeframe(
                     session, binance_client, symbol, timeframe,
@@ -158,12 +166,14 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                 fetch_seconds += time.monotonic() - _fetch_started
                 if result.error:
                     logger.error("Fetch failed for %s %s: %s", symbol, timeframe, result.error)
+                _book_started = time.monotonic()
                 record_run(
                     session, symbol, timeframe,
                     status="error" if result.error else "success",
                     started_at=started_at, finished_at=utc_now(),
                     error_message=result.error,
                 )
+                bookkeeping_seconds += time.monotonic() - _book_started
                 if not result.error:
                     # Skip gap repair when the plain fetch just failed: the
                     # next run retries both, and there is no point hammering an
@@ -258,8 +268,8 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             fmt += ", %d positions closed, %d opened"
             args.append(paper_result.closed)
             args.append(paper_result.opened)
-        fmt += " | fetch %.0fs, gap scan %.0fs, tail %.0fs"
-        args.extend([fetch_seconds, gap_seconds, tail_seconds])
+        fmt += " | fetch %.0fs, gap scan %.0fs, bookkeeping %.0fs, tail %.0fs"
+        args.extend([fetch_seconds, gap_seconds, bookkeeping_seconds, tail_seconds])
         logger.info(fmt, *args)
     finally:
         session.close()
