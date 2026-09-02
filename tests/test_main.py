@@ -180,9 +180,11 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
             calls.append(("scheduler.shutdown", wait))
 
     class _FakeApp:
-        def run(self, host, port, debug=None, use_reloader=None):
-            calls.append(("app.run", host, port, debug, use_reloader))
-            raise KeyboardInterrupt()
+        pass
+
+    def _fake_serve(app, host, port, **kwargs):
+        calls.append(("serve", host, port))
+        raise KeyboardInterrupt()
 
     def _fake_get_basic_auth_credentials():
         calls.append("get_basic_auth_credentials")
@@ -199,6 +201,7 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
     monkeypatch.setattr(main_module, "build_scheduler", _fake_build_scheduler)
     monkeypatch.setattr(main_module, "get_basic_auth_credentials", _fake_get_basic_auth_credentials)
     monkeypatch.setattr(main_module, "create_app", _fake_create_app)
+    monkeypatch.setattr(main_module, "serve", _fake_serve)
     monkeypatch.setenv("PORT", "9000")
 
     main_module.run_forever(session_factory=lambda: None, binance_client=None)
@@ -210,7 +213,7 @@ def test_run_forever_starts_scheduler_serves_dashboard_and_shuts_down_on_exit(mo
         "create_app",
         "build_scheduler",
         "scheduler.start",
-        ("app.run", "0.0.0.0", 9000, False, False),
+        ("serve", "0.0.0.0", 9000),
         # wait=True: a redeploy's SIGTERM must let the in-flight hourly job
         # finish its commit instead of dropping it mid-step.
         ("scheduler.shutdown", True),
@@ -228,10 +231,13 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
             pass
 
     class _FakeApp:
-        def run(self, host, port, debug=None, use_reloader=None):
-            calls.append(("app.run", host, port, debug, use_reloader))
-            raise KeyboardInterrupt()
+        pass
 
+    def _fake_serve(app, host, port, **kwargs):
+        calls.append(("serve", host, port))
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(main_module, "serve", _fake_serve)
     monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
     monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))
     monkeypatch.setattr(
@@ -242,7 +248,7 @@ def test_run_forever_defaults_to_port_8000_when_unset(monkeypatch):
 
     main_module.run_forever(session_factory=lambda: None, binance_client=None)
 
-    assert calls == [("app.run", "0.0.0.0", 8000, False, False)]
+    assert calls == [("serve", "0.0.0.0", 8000)]
 
 
 def test_sigterm_handler_raises_system_exit_so_the_finally_block_runs():
@@ -267,9 +273,12 @@ def test_run_forever_installs_the_sigterm_handler_before_serving(monkeypatch):
             pass
 
     class _FakeApp:
-        def run(self, host, port, debug=None, use_reloader=None):
-            raise SystemExit()
+        pass
 
+    def _fake_serve(app, host, port, **kwargs):
+        raise SystemExit()
+
+    monkeypatch.setattr(main_module, "serve", _fake_serve)
     monkeypatch.setattr(main_module.signal, "signal", _fake_signal)
     monkeypatch.setattr(main_module, "build_scheduler", lambda session_factory, binance_client: _FakeScheduler())
     monkeypatch.setattr(main_module, "get_basic_auth_credentials", lambda: ("admin", "hash"))

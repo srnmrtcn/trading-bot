@@ -30,6 +30,29 @@ def create_app(session_factory, auth_user: str, auth_pass_hash: str) -> Flask:
             and check_password_hash(auth_pass_hash, auth.password)
         )
 
+    @app.route("/health")
+    def health():
+        """Liveness probe. Deliberately unauthenticated and deliberately thin.
+
+        A platform health check cannot carry credentials, so this route has
+        none -- which is why it answers with a single word and no numbers. It
+        reports whether the hourly job is still writing to fetch_log, and
+        nothing about equity, positions or symbols.
+
+        A stalled scheduler answers 503 rather than 200. A process that is
+        alive but no longer fetching is the failure this exists to catch;
+        answering 200 because Flask is still up would hide exactly that.
+        """
+        session = session_factory()
+        try:
+            status = get_system_health(session).status
+            return {"status": status}, 200 if status != "stopped" else 503
+        except Exception:
+            logger.exception("Health check failed")
+            return {"status": "error"}, 503
+        finally:
+            session.close()
+
     @app.route("/")
     def dashboard():
         if not _authorized():

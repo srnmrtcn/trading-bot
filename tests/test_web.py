@@ -4,8 +4,15 @@ from unittest.mock import patch
 
 from werkzeug.security import generate_password_hash
 
-from src.db.models import PaperPosition, PortfolioPosition, PortfolioSnapshot, Scenario
+from src.db.models import (
+    FetchLog,
+    PaperPosition,
+    PortfolioPosition,
+    PortfolioSnapshot,
+    Scenario,
+)
 from src.portfolio.config import STRATEGY_VERSION
+from src.timeutil import utc_now
 from src.web import create_app
 
 AUTH_USER = "admin"
@@ -127,3 +134,38 @@ def test_dashboard_book_does_not_borrow_the_paper_path_equity(db_session):
 
     assert "Defter şu an boş" in body
     assert "10077" not in body.split("Senaryo Motoru — Açık Pozisyonlar")[0].split("Momentum Defteri")[1]
+
+
+def test_health_needs_no_credentials(db_session):
+    # A platform health check cannot send an Authorization header. If this
+    # route ever starts demanding one, the deploy goes unhealthy and the
+    # service restarts in a loop.
+    assert _client(db_session).get("/health").status_code in (200, 503)
+
+
+def test_health_reports_stopped_when_nothing_has_been_fetched(db_session):
+    response = _client(db_session).get("/health")
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "stopped"
+
+
+def test_health_reports_healthy_after_a_recent_fetch(db_session):
+    now = utc_now()
+    db_session.add(FetchLog(
+        symbol="BTCUSDT", timeframe="1h", started_at=now, finished_at=now,
+        status="success",
+    ))
+    db_session.commit()
+
+    response = _client(db_session).get("/health")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "healthy"
+
+
+def test_health_survives_a_broken_query(db_session):
+    with patch("src.web.get_system_health", side_effect=RuntimeError("db down")):
+        response = _client(db_session).get("/health")
+
+    assert response.status_code == 503
+    assert response.get_json()["status"] == "error"

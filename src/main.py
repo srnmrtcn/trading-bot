@@ -14,6 +14,7 @@ from src.scheduler import build_scheduler
 from src.storage import get_kline_time_bounds
 from src.symbol_registry import refresh_symbols
 from src.web import create_app
+from waitress import serve
 
 logger = logging.getLogger("main")
 
@@ -111,7 +112,12 @@ def run_forever(session_factory, binance_client) -> None:
     scheduler.start()
     logger.info("Scheduler started, service running")
     try:
-        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+        # Flask's own server prints "do not use this in a production
+        # deployment" on every boot and means it: it is single-process and
+        # makes no attempt at the connection handling a real server does.
+        # waitress is pure Python, has no configuration to get wrong, and
+        # serves the one page this service exposes.
+        serve(app, host="0.0.0.0", port=port, threads=4, channel_timeout=60)
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
