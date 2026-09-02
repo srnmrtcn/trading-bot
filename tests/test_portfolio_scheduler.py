@@ -52,9 +52,7 @@ class _SahteIstemci:
                  'volume': Decimal(7)}]
 
 
-def test_run_futures_daily_job_yazar_mum():
-    from src.db.session import get_session
-    db_session = get_session()
+def test_run_futures_daily_job_yazar_mum(db_session):
     _sembol(db_session, 'AAAUSDT')
     db_session.commit()
     istemci = _SahteIstemci()
@@ -63,9 +61,7 @@ def test_run_futures_daily_job_yazar_mum():
     assert istemci.cagrilar == ['AAAUSDT']
 
 
-def test_run_futures_daily_job_patlarsa_yutar():
-    from src.db.session import get_session
-    db_session = get_session()
+def test_run_futures_daily_job_patlarsa_yutar(db_session):
     _sembol(db_session, 'AAAUSDT')
     db_session.commit()
     istemci = _SahteIstemci(patlar=True)
@@ -73,17 +69,13 @@ def test_run_futures_daily_job_patlarsa_yutar():
     assert db_session.query(FuturesDailyKline).count() == 0
 
 
-def test_run_portfolio_rebalance_job_defter_acar():
-    from src.db.session import get_session
-    db_session = get_session()
+def test_run_portfolio_rebalance_job_defter_acar(db_session):
     _evren(db_session)
     run_portfolio_rebalance_job(lambda: db_session, NOW)
     assert len(open_positions(db_session)) == 8
 
 
-def test_run_portfolio_rebalance_job_sirasi_gelmediyse_dokunmaz():
-    from src.db.session import get_session
-    db_session = get_session()
+def test_run_portfolio_rebalance_job_sirasi_gelmediyse_dokunmaz(db_session):
     _evren(db_session)
     run_portfolio_rebalance_job(lambda: db_session, NOW)
     run_portfolio_rebalance_job(lambda: db_session, NOW + timedelta(days=1))
