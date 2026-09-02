@@ -39,7 +39,13 @@ def portfolio_equity_history(session, limit: int = EQUITY_HISTORY_LIMIT) -> list
     Sorgu: session.query(PortfolioSnapshot.as_of, PortfolioSnapshot.equity).filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION).order_by(PortfolioSnapshot.as_of.asc(), PortfolioSnapshot.id.asc()).all()
     Sonra listeye cevirip [-limit:] dilimi dondurulur.
     """
-    raise NotImplementedError
+    rows = (
+        session.query(PortfolioSnapshot.as_of, PortfolioSnapshot.equity)
+        .filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION)
+        .order_by(PortfolioSnapshot.as_of.asc(), PortfolioSnapshot.id.asc())
+        .all()
+    )
+    return [(as_of, equity) for as_of, equity in rows][-limit:]
 
 
 def open_book(session) -> list:
@@ -47,7 +53,15 @@ def open_book(session) -> list:
     status == 'open' VE strategy_version == STRATEGY_VERSION olan PortfolioPosition satirlari.
     Siralama: direction ARTAN, sonra symbol ARTAN. Boylece long bacagi ve short bacagi tabloda bitisik durur ve defterin iki yakasi bir bakista gorunur.
     """
-    raise NotImplementedError
+    return (
+        session.query(PortfolioPosition)
+        .filter(
+            PortfolioPosition.status == "open",
+            PortfolioPosition.strategy_version == STRATEGY_VERSION,
+        )
+        .order_by(PortfolioPosition.direction.asc(), PortfolioPosition.symbol.asc())
+        .all()
+    )
 
 
 def book_performance(session) -> BookPerformance:
@@ -88,4 +102,29 @@ def book_performance(session) -> BookPerformance:
            fee_cost=sum((row.fee_cost or zero for row in closed), zero)
            funding_cost=sum((row.funding_cost or zero for row in closed), zero)
     """
-    raise NotImplementedError
+    snapshots = (
+        session.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION)
+        .order_by(PortfolioSnapshot.as_of.desc(), PortfolioSnapshot.id.desc())
+        .all()
+    )
+    closed = (
+        session.query(PortfolioPosition)
+        .filter(
+            PortfolioPosition.status == "closed",
+            PortfolioPosition.strategy_version == STRATEGY_VERSION,
+            PortfolioPosition.realized_pnl.isnot(None),
+        )
+        .all()
+    )
+    zero = Decimal(0)
+    return BookPerformance(
+        equity=portfolio_equity(session),
+        rebalances=len(snapshots),
+        last_rebalance=snapshots[0].as_of if snapshots else None,
+        closed=len(closed),
+        wins=sum(1 for row in closed if row.realized_pnl > 0),
+        gross_pnl=sum((row.gross_pnl or zero for row in closed), zero),
+        fee_cost=sum((row.fee_cost or zero for row in closed), zero),
+        funding_cost=sum((row.funding_cost or zero for row in closed), zero),
+    )

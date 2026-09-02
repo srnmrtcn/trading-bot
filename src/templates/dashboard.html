@@ -13,6 +13,11 @@
   .badge.delayed { background: rgba(210, 153, 34, 0.2); color: #d29922; }
   .badge.stopped { background: rgba(248, 81, 73, 0.2); color: #f85149; }
   .equity-value { font-size: 2rem; font-weight: 700; margin: 0.5rem 0; }
+  .sub { color: #8b949e; font-size: 0.85rem; margin: 0.25rem 0 0; }
+  .up { color: #3fb950; } .down { color: #f85149; }
+  .legs td.long { color: #3fb950; } .legs td.short { color: #f85149; }
+  .split { display: flex; gap: 2rem; flex-wrap: wrap; }
+  .split > div { flex: 1 1 12rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
   th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #30363d; }
   th { color: #8b949e; font-weight: 500; }
@@ -44,7 +49,7 @@
 </div>
 
 <div class="card">
-  <h2>Paper Portföy Equity</h2>
+  <h2>Senaryo Motoru — Paper Equity</h2>
   <div class="equity-value">{{ "%.2f"|format(equity.current) }}</div>
   {% if sparkline_points %}
   <svg width="200" height="40" viewBox="0 0 200 40">
@@ -54,7 +59,63 @@
 </div>
 
 <div class="card">
-  <h2>Açık Pozisyonlar</h2>
+  <h2>Momentum Defteri (dolar-nötr)</h2>
+  <div class="equity-value {{ 'up' if book.return_pct >= 0 else 'down' }}">
+    {{ "%.2f"|format(book.equity) }}
+    <span style="font-size:1rem">({{ "%+.1f"|format(book.return_pct) }}%)</span>
+  </div>
+  {% if book_sparkline_points %}
+  <svg width="200" height="40" viewBox="0 0 200 40">
+    <polyline points="{{ book_sparkline_points }}" fill="none" stroke="#3fb950" stroke-width="2" />
+  </svg>
+  {% endif %}
+  <div class="split">
+    <div>
+      <p class="sub">Denge sayısı: {{ book.rebalances }}</p>
+      <p class="sub">
+        Son denge:
+        {%- if book.last_rebalance %} {{ book.last_rebalance.strftime("%Y-%m-%d %H:%M") }}
+        {%- else %} henüz yok{% endif %}
+      </p>
+    </div>
+    <div>
+      <p class="sub">Kapanan pozisyon: {{ book.closed }}</p>
+      <p class="sub">Kazanan: {{ book.wins }} ({{ "%.1f"|format(book.win_rate) }}%)</p>
+    </div>
+    <div>
+      {# Üçü ayrı duruyor çünkü ayrı teşhisler: komisyon önce kârlı sonra
+         zararlı yapıyorsa sorun ücrette, funding satırı getiriyi domine
+         ediyorsa defter artık momentum değil carry topluyor. #}
+      <p class="sub">Brüt: {{ "%.2f"|format(book.gross_pnl) }}</p>
+      <p class="sub">Komisyon: {{ "%.2f"|format(book.fee_cost) }}</p>
+      <p class="sub">Funding: {{ "%.2f"|format(book.funding_cost) }}</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Defterdeki Pozisyonlar</h2>
+  {% if book_positions %}
+  <table class="legs">
+    <tr><th>Yön</th><th>Sembol</th><th>Giriş</th><th>Adet</th><th>Notional</th><th>Açılış</th></tr>
+    {% for position in book_positions %}
+    <tr>
+      <td class="{{ position.direction }}">{{ position.direction }}</td>
+      <td>{{ position.symbol }}</td>
+      <td>{{ "%.6f"|format(position.entry_price) }}</td>
+      <td>{{ "%.4f"|format(position.position_size) }}</td>
+      <td>{{ "%.2f"|format(position.entry_price * position.position_size) }}</td>
+      <td>{{ position.opened_at.strftime("%Y-%m-%d %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">Defter şu an boş. İlk denge gecelik iş sırasında açılır.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Senaryo Motoru — Açık Pozisyonlar</h2>
   {% if open_positions %}
   <table>
     <tr><th>Sembol</th><th>Yön</th><th>Giriş</th><th>Stop</th><th>Hedef</th><th>Açılış</th></tr>

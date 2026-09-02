@@ -12,6 +12,7 @@ from src.dashboard_data import (
     get_recent_scenarios,
     get_system_health,
 )
+from src.portfolio.dashboard import book_performance, open_book, portfolio_equity_history
 
 logger = logging.getLogger("web")
 
@@ -43,6 +44,10 @@ def create_app(session_factory, auth_user: str, auth_pass_hash: str) -> Flask:
             equity = get_equity_summary(session)
             open_positions = get_open_positions(session)
             recent_scenarios = get_recent_scenarios(session)
+            # The two strategies are rendered side by side but never mixed:
+            # separate tables, separate equity, separate strategy versions.
+            book = book_performance(session)
+            book_history = portfolio_equity_history(session)
             return render_template(
                 "dashboard.html",
                 error=False,
@@ -51,6 +56,9 @@ def create_app(session_factory, auth_user: str, auth_pass_hash: str) -> Flask:
                 sparkline_points=equity_sparkline_points(equity.history),
                 open_positions=open_positions,
                 recent_scenarios=recent_scenarios,
+                book=book,
+                book_positions=open_book(session),
+                book_sparkline_points=equity_sparkline_points(book_history),
             )
         except Exception:
             logger.exception("Failed to load dashboard data")
