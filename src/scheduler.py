@@ -52,12 +52,23 @@ def get_resume_point(session, symbol: str, timeframe: str, now: datetime = None)
     """
     now = now if now is not None else utc_now()
     _, latest = get_kline_time_bounds(session, symbol, timeframe)
+    return resume_point_from(latest, now)
+
+
+def resume_point_from(latest: datetime | None, now: datetime) -> datetime:
+    """The resume decision, without the query that feeds it.
+
+    Split out so a caller that already holds the bounds does not have to ask
+    the database for them a second time. The hourly job is exactly that
+    caller: it needs MIN(open_time) for gap repair and MAX(open_time) for the
+    resume point, and get_kline_time_bounds returns both in one round trip.
+    """
     if latest is not None:
         return latest
     return now - timedelta(days=DEFAULT_BACKFILL_DAYS)
 
 
-def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now: datetime = None) -> int:
+def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now: datetime = None, earliest: datetime = None) -> int:
     """Re-fetch missing candles in the recent window.
 
     Returns the number of gaps that were *actually* repaired — i.e. that stored
@@ -67,7 +78,12 @@ def repair_recent_gaps(session, binance_client, symbol: str, timeframe: str, now
     would report steady progress while nothing is ever stored.
     """
     now = now if now is not None else utc_now()
-    earliest, _ = get_kline_time_bounds(session, symbol, timeframe)
+    if earliest is None:
+        # Only asked for when the caller does not already have it. The hourly
+        # job does, and this query is the one it used to repeat: measured at
+        # roughly 0.4 seconds a call against a Postgres that is not on this
+        # machine, times 489 symbols, twice per run.
+        earliest, _ = get_kline_time_bounds(session, symbol, timeframe)
     if earliest is None:
         # Nothing stored yet: there is no gap to repair, only history to fetch.
         return 0
@@ -154,7 +170,10 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
             symbol_ok = False
             try:
                 _book_started = time.monotonic()
-                start = get_resume_point(session, symbol, timeframe, now=end)
+                # ONE round trip for both facts: MAX for the resume point,
+                # MIN for gap repair's window floor.
+                earliest, latest = get_kline_time_bounds(session, symbol, timeframe)
+                start = resume_point_from(latest, end)
                 started_at = utc_now()
                 bookkeeping_seconds += time.monotonic() - _book_started
                 _fetch_started = time.monotonic()
@@ -179,7 +198,9 @@ def run_timeframe_job(session_factory, binance_client, timeframe: str, now: date
                     # next run retries both, and there is no point hammering an
                     # unreachable API twice per symbol.
                     _gap_started = time.monotonic()
-                    gaps_filled += repair_recent_gaps(session, binance_client, symbol, timeframe, now=end)
+                    gaps_filled += repair_recent_gaps(
+                        session, binance_client, symbol, timeframe,
+                        now=end, earliest=earliest)
                     gap_seconds += time.monotonic() - _gap_started
                     symbol_ok = True
             except Exception:

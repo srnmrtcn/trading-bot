@@ -1,5 +1,6 @@
 import logging
 import re
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -241,7 +242,11 @@ def test_run_timeframe_job_logs_exception_when_no_fetch_log_row_can_be_written(d
     def boom(*args, **kwargs):
         raise RuntimeError("watermark lookup exploded")
 
-    monkeypatch.setattr("src.scheduler.get_resume_point", boom)
+    # Sembol dongusu artik resume noktasini get_kline_time_bounds uzerinden
+    # aliyor (sembol basina tek gidis-donus icin). Testin niyeti degismedi -
+    # "record_run'dan ONCE patlayan bir sey iz birakmadan kaybolmasin" - ama
+    # o yolda duran fonksiyon degisti, kirilacak olan da o.
+    monkeypatch.setattr("src.scheduler.get_kline_time_bounds", boom)
 
     with caplog.at_level(logging.ERROR, logger="scheduler"):
         run_timeframe_job(session_factory=lambda: db_session, binance_client=_FakeBinanceClient(), timeframe="1h")
@@ -712,3 +717,63 @@ def test_summary_line_reports_where_the_time_went(db_session, caplog):
     assert re.fullmatch(
         r"fetch \d+s, gap scan \d+s, bookkeeping \d+s, tail \d+s", ekler[0]
     ), ekler[0]
+
+
+# --- sembol basina TEK bounds sorgusu --------------------------------------
+# Olculdu (18:05 kosusu, 489 sembol, 1736 sn): bookkeeping 438 sn, gap scan
+# 348 sn. Ikisi de sembol basina ~2 veritabani gidis-donusu, yani cagri basina
+# ~0.4 sn - is uzak bir Postgres'e gidip gelmekle geciyor, sorgunun ICINDEKI
+# isle degil. Ve ayni sorgu (get_kline_time_bounds) sembol basina IKI KERE
+# calisiyordu: bir kez resume noktasi icin, bir kez bosluk onarimi icin.
+# Sembol basina bir gidis-donusun kaldirilmasi kosudan ~195 saniye dusurur.
+#
+# Bu testin korudugu sey o: sayinin 1'de kalmasi.
+
+def test_sembol_basina_bounds_sorgusu_bir_kere(db_session, monkeypatch):
+    import src.scheduler as scheduler_module
+
+    hour, _ = _seed_symbol_with_one_hour_gap(db_session)
+    client = _GapServingClient(available=[hour - timedelta(hours=n) for n in (3, 2, 1, 0)])
+
+    cagrilar = []
+    gercek = scheduler_module.get_kline_time_bounds
+
+    def sayan(session, symbol, timeframe):
+        cagrilar.append((symbol, timeframe))
+        return gercek(session, symbol, timeframe)
+
+    monkeypatch.setattr(scheduler_module, "get_kline_time_bounds", sayan)
+    run_timeframe_job(
+        session_factory=lambda: db_session, binance_client=client,
+        timeframe="1h", now=hour + timedelta(minutes=5),
+    )
+
+    # refresh_regime_source de BTCUSDT'nin 1d bounds'unu soruyor; olculen sey
+    # SEMBOL DONGUSUNDE ayni cifti iki kere sormamak.
+    assert cagrilar.count(("BTCUSDT", "1h")) == 1, cagrilar
+
+
+def test_resume_point_from_saf_karar():
+    from src.scheduler import resume_point_from
+    from src.timeutil import DEFAULT_BACKFILL_DAYS
+
+    simdi = datetime(2026, 5, 1, 12)
+    son = datetime(2026, 4, 30, 11)
+    assert resume_point_from(son, simdi) == son
+    assert resume_point_from(None, simdi) == simdi - timedelta(days=DEFAULT_BACKFILL_DAYS)
+
+
+def test_repair_recent_gaps_earliest_verilirse_sormaz(db_session):
+    import src.scheduler as scheduler_module
+
+    hour, _ = _seed_symbol_with_one_hour_gap(db_session)
+    client = _GapServingClient(available=[hour - timedelta(hours=n) for n in (3, 2, 1, 0)])
+    en_erken, _ = scheduler_module.get_kline_time_bounds(db_session, "BTCUSDT", "1h")
+
+    def patlayan(*args, **kwargs):
+        raise AssertionError("earliest verildiginde bounds tekrar sorulmamali")
+
+    with patch.object(scheduler_module, "get_kline_time_bounds", side_effect=patlayan):
+        scheduler_module.repair_recent_gaps(
+            db_session, client, "BTCUSDT", "1h",
+            now=hour + timedelta(minutes=5), earliest=en_erken)
