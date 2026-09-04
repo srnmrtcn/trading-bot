@@ -337,8 +337,10 @@ def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
         result = run_rebalance(session, now)
         if result.acted:
             logger.info(
-                "Portfolio rebalanced: %d closed, %d opened, universe %d, equity %s",
-                result.closed, result.opened, result.universe, result.equity,
+                "Portfolio rebalanced: %d closed, %d carried, %d opened, "
+                "universe %d, equity %s, collapses %d",
+                result.closed, result.carried, result.opened,
+                result.universe, result.equity, result.collapses,
             )
         elif result.reason == "not_due":
             logger.debug("Portfolio rebalance not due yet")

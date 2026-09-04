@@ -43,6 +43,18 @@ logger = logging.getLogger("portfolio")
 # almost never fire.
 EXTREME_DAILY_MOVE = Decimal("3")
 
+# A position that moved this far against us over the week it was held.
+#
+# The survivorship stress test found this is the ONE way the book's edge
+# dies: names collapsing while held in the long leg. Injected at 1% of the
+# universe per rebalance, four-year weekly net goes +0.67% -> -0.94%;
+# break-even sits between 0.5% and 1%. The threshold is measured, and until
+# now nothing counted how close the live book runs to it.
+#
+# 50% rather than the 60-95% the test injected: this is meant to catch the
+# onset, not only the finished collapse.
+COLLAPSE_MOVE = Decimal("0.5")
+
 
 def is_rebalance_due(session, now: datetime) -> bool:
     """
@@ -112,6 +124,10 @@ class RebalanceResult:
     # arrived" (0) from "the bars are here but too few names clear the
     # liquidity floor" (many, with universe 0).
     symbols: int = 0
+    # Positions that moved COLLAPSE_MOVE or more against us over the week.
+    # Compared against the universe size, this is the rate the ani-olum test
+    # says the edge cannot survive above.
+    collapses: int = 0
     # Names that were already held and stay held. They pay no fee this week,
     # which is the whole point: measured on the replayed history, 49.4% of
     # names survive from one book to the next and closing them cost 48.9% of
@@ -154,6 +170,7 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
 
     closed = 0
     carried = 0
+    collapses = 0
     for position in open_positions(session):
         key = (position.symbol, position.direction)
         if key in target:
@@ -171,6 +188,15 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
         if price is None:
             continue
         events = funding_events_between(session, position.symbol, position.opened_at, now)
+        adverse = adverse_move(position.direction, position.entry_price, price)
+        if adverse >= COLLAPSE_MOVE:
+            collapses += 1
+            logger.warning(
+                "%s %s collapsed %.0f%% against the book while held "
+                "(entry %s, exit %s)",
+                position.symbol, position.direction, adverse * 100,
+                position.entry_price, price,
+            )
         equity += close_position(session, position, price, events, now)
         closed += 1
 
@@ -202,7 +228,7 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     # above uses the marked figure.
     record_snapshot(session, now, equity, closed, opened)
     return RebalanceResult(True, closed, opened, equity, universe, "ok",
-                           len(bars), carried)
+                           len(bars), collapses, carried)
 
 
 def biggest_daily_move(day_closes: dict):
@@ -223,3 +249,19 @@ def biggest_daily_move(day_closes: dict):
         if biggest is None or move > biggest:
             biggest = move
     return biggest
+
+
+def adverse_move(direction: str, entry, exit_price):
+    """How far the price went AGAINST a position, as a positive fraction.
+
+    A separate function because the sign cannot be tested through
+    run_rebalance. Everything that reaches the closing branch has usually moved
+    against the book already -- a name that rose stays in the long leg and is
+    carried, a name that fell stays in the short leg and is carried -- so
+    signed and absolute agree on nearly every position that is actually closed.
+    A test driving the whole rebalance therefore passes against a version that
+    ignores direction entirely, which is the version that would report the
+    book's best week as an alarm.
+    """
+    move = (exit_price - entry) / entry
+    return -move if direction == "long" else move

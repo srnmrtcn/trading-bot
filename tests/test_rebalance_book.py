@@ -324,3 +324,66 @@ def test_biggest_daily_move_bos_ve_tek_elemanda_none(db_session):
     assert biggest_daily_move({date(2026, 1, 1): Decimal(100)}) is None
     assert biggest_daily_move({date(2026, 1, 1): Decimal(100),
                                date(2026, 1, 2): Decimal(150)}) == Decimal("0.5")
+
+
+# --- ani cokus sayaci -------------------------------------------------------
+# Hayatta kalma stres testi defterin edge'inin TEK olum seklini buldu: uzun
+# bacakta ani cokus. Denge basina evrenin %1'i cokerse dort yillik haftalik net
+# +%0.67 -> -%0.94; basabas %0.5 ile %1 arasinda. Esik olculdu ama canli defter
+# ona ne kadar yakin kostugunu saymiyordu.
+
+def _fiyat_carp(session, sembol, kat, ilk_gun, gun_sayisi):
+    for g in range(gun_sayisi):
+        satir = (session.query(FuturesDailyKline)
+                 .filter(FuturesDailyKline.symbol == sembol,
+                         FuturesDailyKline.open_time == ilk_gun + timedelta(days=g))
+                 .first())
+        if satir is not None:
+            satir.close = satir.close * Decimal(str(kat))
+            satir.volume = Decimal(60000000) / satir.close
+    session.commit()
+
+
+def test_uzun_bacakta_cokus_sayilir_ve_uyarir(db_session, caplog):
+    _evren(db_session)
+    run_rebalance(db_session, NOW)
+    uzunlar = sorted(p.symbol for p in open_positions(db_session)
+                     if p.direction == 'long')
+    _gunler_ekle(db_session, BASLANGIC + timedelta(days=70), REBALANCE_DAYS + 1)
+    # tutulan bir uzun ismi hafta icinde %80 cokert
+    _fiyat_carp(db_session, uzunlar[0], 0.20,
+                BASLANGIC + timedelta(days=70), REBALANCE_DAYS + 1)
+
+    with caplog.at_level(logging.WARNING, logger='portfolio'):
+        sonuc = run_rebalance(db_session, NOW + timedelta(days=REBALANCE_DAYS))
+
+    assert sonuc.collapses == 1
+    uyarilar = [k.getMessage() for k in caplog.records
+                if k.levelno == logging.WARNING and 'collapsed' in k.getMessage()]
+    assert len(uyarilar) == 1
+    assert uzunlar[0] in uyarilar[0]
+
+
+def test_normal_haftada_cokus_sifir(db_session, caplog):
+    _evren(db_session)
+    run_rebalance(db_session, NOW)
+    _gunler_ekle(db_session, BASLANGIC + timedelta(days=70), REBALANCE_DAYS + 1)
+    with caplog.at_level(logging.WARNING, logger='portfolio'):
+        sonuc = run_rebalance(db_session, NOW + timedelta(days=REBALANCE_DAYS))
+    assert sonuc.collapses == 0
+    assert [k for k in caplog.records if 'collapsed' in k.getMessage()] == []
+
+
+def test_adverse_move_yonu_dogru_okur():
+    # Bu testin ayri durmasinin sebebi: kapanan pozisyonlar zaten aleyhe
+    # hareket etmis olanlardir (yukselen isim uzun bacakta, dusen isim kisa
+    # bacakta TASINIR), o yuzden isaretli ve mutlak deger kapanan kumede
+    # neredeyse hep ayni sonucu verir. run_rebalance uzerinden kurulan bir
+    # test, yonu tamamen yok sayan bir surumu de gecirir - ve o surum defterin
+    # EN IYI haftasini alarm gibi gosterirdi.
+    from src.portfolio.rebalancer import adverse_move
+    d = Decimal
+    assert adverse_move('long', d(100), d(20)) == d("0.8")    # dustu: aleyhe
+    assert adverse_move('long', d(100), d(180)) == d("-0.8")  # yukseldi: lehe
+    assert adverse_move('short', d(100), d(180)) == d("0.8")  # yukseldi: aleyhe
+    assert adverse_move('short', d(100), d(20)) == d("-0.8")  # dustu: lehe
