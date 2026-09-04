@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from decimal import Decimal
@@ -27,6 +29,19 @@ from src.portfolio.config import (
 )
 from src.portfolio.selection import book_for, closes_by_day
 from src.timeutil import utc_now
+
+logger = logging.getLogger("portfolio")
+
+# A single-day move this large is either a real crypto move or a bad print,
+# and from close prices alone the two are indistinguishable. Measured over
+# four years, screening such names OUT of the universe costs return at every
+# threshold tried -- the extreme movers carry real momentum -- so nothing is
+# filtered. This only reports, because the ani-olum test found the one way
+# this book's edge dies: a name collapsing while held in the LONG leg. A
+# fake +300% print manufactures exactly that, and until now it would have
+# happened silently. Four years of data hold 7 candidates, so this should
+# almost never fire.
+EXTREME_DAILY_MOVE = Decimal("3")
 
 
 def is_rebalance_due(session, now: datetime) -> bool:
@@ -163,6 +178,13 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     for (symbol, direction), (size, price) in target.items():
         record_open(session, symbol, direction, price, size, now)
         opened += 1
+        move = biggest_daily_move(closes.get(symbol) or {})
+        if move is not None and move > EXTREME_DAILY_MOVE:
+            logger.warning(
+                "%s entered the book %s after a %.0f%% single-day move -- "
+                "real move or bad print, worth a look",
+                symbol, direction, move * 100,
+            )
 
     if closed == 0 and opened == 0 and carried == 0:
         # Nothing happened, so the week is NOT spent. Recording a snapshot here
@@ -181,3 +203,23 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     record_snapshot(session, now, equity, closed, opened)
     return RebalanceResult(True, closed, opened, equity, universe, "ok",
                            len(bars), carried)
+
+
+def biggest_daily_move(day_closes: dict):
+    """Largest absolute close-to-close move in a symbol's loaded window.
+
+    Returns None when there is nothing to compare. Only closes are stored for
+    daily futures bars -- no high or low -- so this is the only integrity
+    signal available; an intra-bar consistency check is not possible.
+    """
+    if len(day_closes) < 2:
+        return None
+    ordered = [day_closes[day] for day in sorted(day_closes)]
+    biggest = None
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous is None or current is None or previous <= 0:
+            continue
+        move = abs(current / previous - 1)
+        if biggest is None or move > biggest:
+            biggest = move
+    return biggest

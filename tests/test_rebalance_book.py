@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -265,3 +266,61 @@ def test_boyutlandirma_gerceklesmemis_kari_da_sayar(db_session):
     isaretli = marked_equity(db_session, kapanislar)
     gerceklesmis = portfolio_equity(db_session)
     assert isaretli != gerceklesmis, "test anlamsiz: gerceklesmemis k/z sifir"
+
+
+# --- uc gunluk hareket: filtrele DEGIL, bildir ------------------------------
+# Dort yillik olcum, boyle isimleri evrenden ELEMENIN her esikte getiri
+# kaybettirdigini gosterdi (%300'de +%0.66, %50'de +%0.50, %30'da +%0.39,
+# filtresiz +%0.67): uc hareketler gercek momentum tasiyor. O yuzden hicbiri
+# elenmiyor. Ama ani olum testi defterin edge'inin TEK olum sekli olarak uzun
+# bacakta cokusu isaret etti ve sahte bir +%300 baski tam onu uretir - simdiye
+# kadar sessizce olurdu.
+
+def _tek_gun_sicrat(session, sembol, kat):
+    """Bir gunun kapanisini kat ile carpar, sonraki gunleri de kaydirir."""
+    satirlar = (session.query(FuturesDailyKline)
+                .filter(FuturesDailyKline.symbol == sembol)
+                .order_by(FuturesDailyKline.open_time).all())
+    for satir in satirlar[40:]:
+        satir.close = satir.close * Decimal(str(kat))
+    session.commit()
+
+
+def test_uc_hareketli_isim_deftere_girerse_uyarir(db_session, caplog):
+    _evren(db_session)
+    en_iyi = 'S00'                      # en guclu momentum, uzun bacakta
+    _tek_gun_sicrat(db_session, en_iyi, 5)   # tek gunde x5 = +%400
+
+    with caplog.at_level(logging.WARNING, logger='portfolio'):
+        run_rebalance(db_session, NOW)
+
+    uyarilar = [k.getMessage() for k in caplog.records
+                if k.levelno == logging.WARNING and k.name == 'portfolio']
+    assert len(uyarilar) == 1, uyarilar
+    assert en_iyi in uyarilar[0]
+    assert 'single-day move' in uyarilar[0]
+
+
+def test_uc_hareketli_isim_YINE_DE_deftere_girer(db_session):
+    # Uyarmak elemek degil. Olcum elemenin getiri kaybettirdigini soyluyor.
+    _evren(db_session)
+    _tek_gun_sicrat(db_session, 'S00', 5)
+    run_rebalance(db_session, NOW)
+    tutulan = {p.symbol for p in open_positions(db_session)}
+    assert 'S00' in tutulan
+
+
+def test_normal_defterde_uyari_cikmaz(db_session, caplog):
+    _evren(db_session)
+    with caplog.at_level(logging.WARNING, logger='portfolio'):
+        run_rebalance(db_session, NOW)
+    assert [k for k in caplog.records if k.name == 'portfolio'] == []
+
+
+def test_biggest_daily_move_bos_ve_tek_elemanda_none(db_session):
+    from src.portfolio.rebalancer import biggest_daily_move
+    from datetime import date
+    assert biggest_daily_move({}) is None
+    assert biggest_daily_move({date(2026, 1, 1): Decimal(100)}) is None
+    assert biggest_daily_move({date(2026, 1, 1): Decimal(100),
+                               date(2026, 1, 2): Decimal(150)}) == Decimal("0.5")
