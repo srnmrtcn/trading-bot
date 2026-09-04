@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from src.db.models import PortfolioPosition, PortfolioSnapshot
-from src.portfolio.book import portfolio_equity
+from sqlalchemy import func
+
+from src.db.models import FuturesDailyKline, PortfolioPosition, PortfolioSnapshot
+from src.portfolio.book import marked_equity, portfolio_equity
 from src.portfolio.config import REBALANCE_DAYS, STARTING_EQUITY, STRATEGY_VERSION
 from src.timeutil import utc_now
 
@@ -47,6 +49,19 @@ class BookPerformance:
     long_leg: LegPerformance
     short_leg: LegPerformance
     as_of: datetime
+    # Equity including the unrealised P&L of positions still open.
+    #
+    # It became necessary the moment the book started carrying names. Before
+    # that it closed everything every week, so realised equity WAS the whole
+    # story and the page told the truth. A carried position's profit now sits
+    # unrealised for as long as the book keeps wanting that name, and the
+    # realised curve reports it as if it did not exist -- lumpy, always behind,
+    # and worst at exactly the moment the book is doing well.
+    marked: Decimal = Decimal(0)
+
+    @property
+    def marked_return_pct(self) -> Decimal:
+        return (self.marked / STARTING_EQUITY - 1) * 100
 
     @property
     def days_since_rebalance(self) -> int | None:
@@ -124,6 +139,7 @@ def book_performance(session, now: datetime | None = None) -> BookPerformance:
     leg lines and the totals instead of being silently folded into one side.
     """
     now = now if now is not None else utc_now()
+    closes = latest_closes(session)
     snapshots = (
         session.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION)
@@ -162,4 +178,31 @@ def book_performance(session, now: datetime | None = None) -> BookPerformance:
         long_leg=leg("long"),
         short_leg=leg("short"),
         as_of=now,
+        marked=marked_equity(session, closes),
     )
+
+
+def latest_closes(session) -> dict:
+    """{symbol: most recent daily close} for every symbol that has bars.
+
+    One grouped query rather than one per position: this runs on every page
+    load, and the book holds up to twenty names.
+    """
+    newest = (
+        session.query(
+            FuturesDailyKline.symbol.label("symbol"),
+            func.max(FuturesDailyKline.open_time).label("open_time"),
+        )
+        .group_by(FuturesDailyKline.symbol)
+        .subquery()
+    )
+    rows = (
+        session.query(FuturesDailyKline.symbol, FuturesDailyKline.close)
+        .join(
+            newest,
+            (FuturesDailyKline.symbol == newest.c.symbol)
+            & (FuturesDailyKline.open_time == newest.c.open_time),
+        )
+        .all()
+    )
+    return {symbol: close for symbol, close in rows}

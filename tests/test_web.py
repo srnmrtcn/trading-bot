@@ -164,6 +164,34 @@ def test_dashboard_does_not_warn_between_rebalances(db_session):
     assert "Denge gecikti" not in body
 
 
+def test_dashboard_shows_marked_and_realised_equity(db_session):
+    # Tasima sonrasi gerceklesmis esitlik tek basina yaniltici. Manset piyasaya
+    # gore, gerceklesmis altta - ve ikisi FARKLI olmali, yoksa test bir sey
+    # dogrulamiyordur.
+    from src.db.models import FuturesDailyKline
+    db_session.add(PortfolioSnapshot(
+        strategy_version=STRATEGY_VERSION, as_of=utc_now() - timedelta(days=2),
+        equity=Decimal("10500"),
+    ))
+    db_session.add(PortfolioPosition(
+        strategy_version=STRATEGY_VERSION, symbol="ETHUSDT", direction="long",
+        entry_price=Decimal("2000"), position_size=Decimal("3"),
+        opened_at=utc_now() - timedelta(days=2), status="open",
+    ))
+    db_session.add(FuturesDailyKline(
+        symbol="ETHUSDT", open_time=utc_now(),
+        close=Decimal("2100"), volume=Decimal("1"),
+    ))
+    db_session.commit()
+
+    body = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD)).get_data(as_text=True)
+    kart = body.split("Defterdeki Pozisyonlar")[0]
+
+    assert "10800.00" in kart      # piyasaya gore: 10500 + (2100-2000)x3
+    assert "10500.00" in kart      # gerceklesmis
+    assert "piyasaya göre" in kart
+
+
 def test_dashboard_book_does_not_borrow_the_paper_path_equity(db_session):
     # Both strategies keep an equity figure. Rendering one under the other's
     # heading would be invisible in the numbers and wrong in every conclusion

@@ -226,3 +226,37 @@ def test_book_performance_sekiz_gun_gecikmis_sayilir(db_session):
     p = book_performance(db_session, now=NOW + timedelta(days=8))
     assert p.days_since_rebalance == 8
     assert p.rebalance_overdue is True
+
+
+# --- piyasaya gore esitlik panoda ------------------------------------------
+# Tasima devreye girdikten sonra gerceklesmis esitlik tek basina yaniltici:
+# kazancin bir kismi acik pozisyonlarda gerceklesmemis duruyor ve egri hep
+# geriden geliyor - en cok da defter iyi giderken.
+
+def test_book_performance_marked_acik_pozisyonu_sayar(db_session):
+    from src.db.models import FuturesDailyKline
+    _pozisyon(db_session, 'AAAUSDT', 'long')          # acik, giris 100, adet 2
+    db_session.add(FuturesDailyKline(symbol='AAAUSDT', open_time=NOW,
+                                     close=Decimal(130), volume=Decimal(1)))
+    db_session.commit()
+    p = book_performance(db_session, now=NOW)
+    assert p.equity == STARTING_EQUITY                # gerceklesmis degismedi
+    assert p.marked == STARTING_EQUITY + 60           # (130-100) x 2
+
+
+def test_book_performance_marked_acik_pozisyon_yokken_esit(db_session):
+    p = book_performance(db_session, now=NOW)
+    assert p.marked == p.equity
+
+
+def test_latest_closes_en_son_mumu_alir(db_session):
+    from src.db.models import FuturesDailyKline
+    from src.portfolio.dashboard import latest_closes
+    for gun, fiyat in ((0, 10), (1, 20), (2, 30)):
+        db_session.add(FuturesDailyKline(symbol='AAAUSDT',
+                                         open_time=NOW + timedelta(days=gun),
+                                         close=Decimal(fiyat), volume=Decimal(1)))
+    db_session.add(FuturesDailyKline(symbol='BBBUSDT', open_time=NOW,
+                                     close=Decimal(7), volume=Decimal(1)))
+    db_session.commit()
+    assert latest_closes(db_session) == {'AAAUSDT': Decimal(30), 'BBBUSDT': Decimal(7)}

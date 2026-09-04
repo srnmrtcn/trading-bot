@@ -60,10 +60,20 @@
 
 <div class="card">
   <h2>Momentum Defteri (dolar-nötr)</h2>
-  <div class="equity-value {{ 'up' if book.return_pct >= 0 else 'down' }}">
-    {{ "%.2f"|format(book.equity) }}
-    <span style="font-size:1rem">({{ "%+.1f"|format(book.return_pct) }}%)</span>
+  {# Defter artik degismeyen isimleri tasiyor, yani kazancin bir kismi
+     GERCEKLESMEMIS olarak acik pozisyonlarda duruyor. Manset rakam piyasaya
+     gore olan, cunku ekonomik gercek o; gerceklesmis rakam altta duruyor ve
+     saklanan snapshot gecmisiyle ayni seyi soyluyor. Ikisinin arasindaki fark
+     acik defterin kar/zarari - kucukse defter yeni acilmis, buyukse tasinan
+     pozisyonlar kar/zarar biriktirmis demektir. #}
+  <div class="equity-value {{ 'up' if book.marked_return_pct >= 0 else 'down' }}">
+    {{ "%.2f"|format(book.marked) }}
+    <span style="font-size:1rem">({{ "%+.1f"|format(book.marked_return_pct) }}%)</span>
   </div>
+  <p class="sub">
+    piyasaya göre · gerçekleşmiş {{ "%.2f"|format(book.equity) }}
+    ({{ "%+.1f"|format(book.return_pct) }}%)
+  </p>
   {% if book_sparkline_points %}
   <svg width="200" height="40" viewBox="0 0 200 40">
     <polyline points="{{ book_sparkline_points }}" fill="none" stroke="#3fb950" stroke-width="2" />
