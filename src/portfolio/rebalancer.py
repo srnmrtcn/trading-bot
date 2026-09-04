@@ -9,7 +9,13 @@ from src.integrity import floor_to_timeframe
 from src.portfolio.config import REBALANCE_DAYS, STRATEGY_VERSION
 from src.funding_collector import funding_events_between
 from src.portfolio.accounting import position_sizes
-from src.portfolio.book import close_position, open_positions, portfolio_equity, record_open
+from src.portfolio.book import (
+    close_position,
+    marked_equity,
+    open_positions,
+    portfolio_equity,
+    record_open,
+)
 from src.portfolio.config import (
     LEG_EXPOSURE,
     LIQUIDITY_WINDOW_DAYS,
@@ -91,6 +97,11 @@ class RebalanceResult:
     # arrived" (0) from "the bars are here but too few names clear the
     # liquidity floor" (many, with universe 0).
     symbols: int = 0
+    # Names that were already held and stay held. They pay no fee this week,
+    # which is the whole point: measured on the replayed history, 49.4% of
+    # names survive from one book to the next and closing them cost 48.9% of
+    # all fees paid.
+    carried: int = 0
 
 
 def run_rebalance(session, now: datetime = None) -> RebalanceResult:
@@ -105,31 +116,55 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     history = LIQUIDITY_WINDOW_DAYS + max(LOOKBACK_DAYS) + SIGNAL_SKIP_DAYS + 2
     bars = load_daily_bars(session, now, history)
     closes = {symbol: closes_by_day(rows) for symbol, rows in bars.items()}
+    latest = {symbol: day_closes[max(day_closes)]
+              for symbol, day_closes in closes.items() if day_closes}
 
-    closed = 0
-    for position in open_positions(session):
-        day_closes = closes.get(position.symbol) or {}
-        if not day_closes:
-            continue
-        events = funding_events_between(session, position.symbol, position.opened_at, now)
-        equity += close_position(session, position, day_closes[max(day_closes)], events, now)
-        closed += 1
-
+    # The new book is decided BEFORE anything is closed, because what to close
+    # depends on it: a name the new book still wants is carried rather than
+    # sold and bought back. Sized on marked equity, since carried positions
+    # hold unrealised P&L that banked equity does not know about.
     as_of = (floor_to_timeframe(now, "1d") - timedelta(days=1)).date()
-    opened = 0
     universe = 0
-    if equity > 0:
+    target = {}
+    marked = marked_equity(session, latest)
+    if marked > 0:
         longs, shorts, prices = book_for(
             bars, as_of, LOOKBACK_DAYS, SIGNAL_SKIP_DAYS, TOP_FRACTION,
             LIQUIDITY_WINDOW_DAYS, MIN_DOLLAR_VOLUME, MIN_UNIVERSE,
         )
         universe = len(longs) + len(shorts)
         for direction, names in (("long", longs), ("short", shorts)):
-            for symbol, size in position_sizes(equity, names, prices, LEG_EXPOSURE).items():
-                record_open(session, symbol, direction, prices[symbol], size, now)
-                opened += 1
+            for symbol, size in position_sizes(marked, names, prices, LEG_EXPOSURE).items():
+                target[(symbol, direction)] = (size, prices[symbol])
 
-    if closed == 0 and opened == 0:
+    closed = 0
+    carried = 0
+    for position in open_positions(session):
+        key = (position.symbol, position.direction)
+        if key in target:
+            # Same name, same side: keep it. Its size is left alone rather than
+            # trimmed to this week's target. Equity moves a per cent or so a
+            # week, so the drift is small, and correcting it would mean a
+            # partial close -- paying part of the fee this change exists to
+            # avoid, and blending the entry basis that the P&L is measured
+            # against. The replay is what decides whether that trade is worth
+            # making; it is not worth guessing at.
+            carried += 1
+            del target[key]
+            continue
+        price = latest.get(position.symbol)
+        if price is None:
+            continue
+        events = funding_events_between(session, position.symbol, position.opened_at, now)
+        equity += close_position(session, position, price, events, now)
+        closed += 1
+
+    opened = 0
+    for (symbol, direction), (size, price) in target.items():
+        record_open(session, symbol, direction, price, size, now)
+        opened += 1
+
+    if closed == 0 and opened == 0 and carried == 0:
         # Nothing happened, so the week is NOT spent. Recording a snapshot here
         # would set the clock and block the next attempt for a full
         # REBALANCE_DAYS -- which is exactly the wrong response to the reason
@@ -140,6 +175,9 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
         return RebalanceResult(False, 0, 0, equity, universe, "no_book",
                               len(bars))
 
+    # The snapshot still records REALISED equity, so the stored history and
+    # the dashboard keep the meaning they have always had. Only the sizing
+    # above uses the marked figure.
     record_snapshot(session, now, equity, closed, opened)
     return RebalanceResult(True, closed, opened, equity, universe, "ok",
-                           len(bars))
+                           len(bars), carried)

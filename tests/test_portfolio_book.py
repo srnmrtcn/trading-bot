@@ -84,3 +84,69 @@ def test_close_position_loss(db_session):
     result = close_position(db_session, p, Decimal(90), [], NOW)
     assert p.gross_pnl == Decimal(-20)
     assert result < Decimal(-20)
+
+
+# --- piyasaya gore esitlik --------------------------------------------------
+# Defter bugun her hafta her ismi kapatip yeniden aciyor, o yuzden yeni defteri
+# boyutlandirdigi an elinde acik pozisyon yok ve GERCEKLESMIS esitlik dogru
+# olcudur. Degismeyen isimler tasinmaya baslayinca bu bozulur: tasinan
+# pozisyonun kar/zarari gerceklesmemis olarak durur, ve yeni defteri bayat bir
+# esitlikle boyutlandirmak bilesiklenmeyi sessizce yanlis yapar - her pozisyon
+# tek tek dogru gorunurken.
+
+def test_marked_equity_acik_pozisyon_yokken_gerceklesmise_esit(db_session):
+    from src.portfolio.book import marked_equity
+    db_session.add(PortfolioSnapshot(strategy_version=STRATEGY_VERSION,
+                                     as_of=NOW, equity=Decimal(11000)))
+    db_session.commit()
+    assert marked_equity(db_session, {}) == Decimal(11000)
+
+
+def test_marked_equity_long_pozisyonun_gerceklesmemis_karini_ekler(db_session):
+    from src.portfolio.book import marked_equity
+    record_open(db_session, 'AAAUSDT', 'long', Decimal(100), Decimal(3), NOW)
+    # 100 -> 110, 3 adet  => +30
+    assert marked_equity(db_session, {'AAAUSDT': Decimal(110)}) == STARTING_EQUITY + 30
+
+
+def test_marked_equity_short_pozisyonda_isaret_ters(db_session):
+    from src.portfolio.book import marked_equity
+    record_open(db_session, 'BBBUSDT', 'short', Decimal(100), Decimal(3), NOW)
+    assert marked_equity(db_session, {'BBBUSDT': Decimal(110)}) == STARTING_EQUITY - 30
+    assert marked_equity(db_session, {'BBBUSDT': Decimal(90)}) == STARTING_EQUITY + 30
+
+
+def test_marked_equity_fiyati_olmayan_pozisyonu_maliyetinden_tasir(db_session):
+    # Eksik fiyat sifir kar/zarar demek DEGIL; uydurma bir mark yazmaktansa
+    # pozisyon maliyetinden tasinir. Sifir yazmak da bir varsayimdir ama
+    # uydurulmus bir fiyattan daha az zararlidir.
+    from src.portfolio.book import marked_equity
+    record_open(db_session, 'AAAUSDT', 'long', Decimal(100), Decimal(3), NOW)
+    record_open(db_session, 'CCCUSDT', 'long', Decimal(50), Decimal(2), NOW)
+    assert marked_equity(db_session, {'AAAUSDT': Decimal(110)}) == STARTING_EQUITY + 30
+
+
+def test_marked_equity_kapanmis_pozisyonu_iki_kere_saymaz(db_session):
+    # Kapanmis pozisyonun kar/zarari zaten snapshot esitliginde. Onu bir de
+    # gerceklesmemis diye eklemek cift sayim olurdu.
+    from src.portfolio.book import marked_equity
+    db_session.add(PortfolioSnapshot(strategy_version=STRATEGY_VERSION,
+                                     as_of=NOW, equity=Decimal(10500)))
+    db_session.add(PortfolioPosition(
+        strategy_version=STRATEGY_VERSION, symbol='DDDUSDT', direction='long',
+        entry_price=Decimal(100), position_size=Decimal(5), opened_at=NOW,
+        closed_at=NOW, exit_price=Decimal(120), status='closed',
+        gross_pnl=Decimal(100), fee_cost=Decimal(0), funding_cost=Decimal(0),
+        realized_pnl=Decimal(100)))
+    db_session.commit()
+    assert marked_equity(db_session, {'DDDUSDT': Decimal(120)}) == Decimal(10500)
+
+
+def test_marked_equity_baska_surumu_saymaz(db_session):
+    from src.portfolio.book import marked_equity
+    db_session.add(PortfolioPosition(
+        strategy_version='baska-surum', symbol='ZZZUSDT', direction='long',
+        entry_price=Decimal(100), position_size=Decimal(9), opened_at=NOW,
+        status='open'))
+    db_session.commit()
+    assert marked_equity(db_session, {'ZZZUSDT': Decimal(200)}) == STARTING_EQUITY
