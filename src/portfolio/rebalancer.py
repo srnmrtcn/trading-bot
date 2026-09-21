@@ -56,19 +56,43 @@ EXTREME_DAILY_MOVE = Decimal("3")
 COLLAPSE_MOVE = Decimal("0.5")
 
 
-def is_rebalance_due(session, now: datetime) -> bool:
-    """
-    Returns True if a rebalance is due based on the last snapshot and current time.
-    """
-    last = (
+def last_snapshot(session):
+    """The most recent snapshot of THIS strategy version, or None."""
+    return (
         session.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.strategy_version == STRATEGY_VERSION)
         .order_by(PortfolioSnapshot.as_of.desc(), PortfolioSnapshot.id.desc())
         .first()
     )
+
+
+def next_due_after(as_of: datetime) -> datetime:
+    """The first moment a rebalance may run again, given the last one's as_of."""
+    return floor_to_timeframe(as_of, "1d") + timedelta(days=REBALANCE_DAYS)
+
+
+def is_rebalance_due(session, now: datetime) -> bool:
+    """Is a new rebalance due? Measured in DAYS, not in seconds.
+
+    `as_of` records the instant the job actually ran, and that instant moves
+    every week: the job is scheduled for 00:50 but queues behind the 00:40 bar
+    sweep on a single worker, so it starts whenever that finishes -- 00:52:46
+    one week, 00:52:20 the next.
+
+    Comparing those instants with `now - as_of >= 7 days` turns that jitter
+    into a threshold. A week that happens to start seconds EARLIER than the
+    previous one falls short of seven days and the book stands still for
+    another full week -- silently, because "not due" is the quiet answer six
+    days out of seven. Roughly a coin flip, every week.
+
+    Flooring both sides to the day removes the jitter entirely: the question
+    becomes "have seven calendar days passed", which no amount of queueing
+    delay can change. The same day twice still answers no.
+    """
+    last = last_snapshot(session)
     if last is None:
         return True
-    return now - last.as_of >= timedelta(days=REBALANCE_DAYS)
+    return floor_to_timeframe(now, "1d") - floor_to_timeframe(last.as_of, "1d") >= timedelta(days=REBALANCE_DAYS)
 
 
 def load_daily_bars(session, now: datetime, days: int) -> dict:
@@ -133,6 +157,17 @@ class RebalanceResult:
     # names survive from one book to the next and closing them cost 48.9% of
     # all fees paid.
     carried: int = 0
+    # NOTE: everything below is keyword-only in practice. This dataclass is
+    # built POSITIONALLY above, so a new field inserted anywhere but the end
+    # silently shifts the ones after it -- carried landed in a new slot and
+    # two tests caught it.
+    #
+    # How many positions the book is holding. On a "not_due" run this is the
+    # only proof the book is alive: six days out of seven nothing else happens.
+    held: int = 0
+    # When the next rebalance may run. Reported on "not_due" so a silent week
+    # and a dead job stop looking identical from the log.
+    next_due: datetime | None = None
 
 
 def run_rebalance(session, now: datetime = None) -> RebalanceResult:
@@ -142,7 +177,10 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
     now = now if now is not None else utc_now()
     equity = portfolio_equity(session)
     if not is_rebalance_due(session, now):
-        return RebalanceResult(False, 0, 0, equity, 0, "not_due")
+        last = last_snapshot(session)
+        return RebalanceResult(False, 0, 0, equity, 0, "not_due",
+                               held=len(open_positions(session)),
+                               next_due=next_due_after(last.as_of) if last else None)
 
     history = LIQUIDITY_WINDOW_DAYS + max(LOOKBACK_DAYS) + SIGNAL_SKIP_DAYS + 2
     bars = load_daily_bars(session, now, history)
@@ -168,6 +206,17 @@ def run_rebalance(session, now: datetime = None) -> RebalanceResult:
             for symbol, size in position_sizes(marked, names, prices, LEG_EXPOSURE).items():
                 target[(symbol, direction)] = (size, prices[symbol])
 
+    # Buradan snapshot'a kadar olan her sey TEK transaction. close_position ve
+    # record_open artik commit etmiyor, yalnizca flush ediyor; araya giren bir
+    # hata her seyi geri alir ve defter bir onceki haftanin halinde kalir.
+    try:
+        return _defteri_kur(session, now, equity, target, latest, closes, universe, bars)
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _defteri_kur(session, now, equity, target, latest, closes, universe, bars):
     closed = 0
     carried = 0
     collapses = 0

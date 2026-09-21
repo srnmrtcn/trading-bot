@@ -83,48 +83,65 @@ class BinanceClient:
             results[entry["symbol"]] = Decimal(str(rate))
         return results
 
-    def get_funding_events(self) -> dict:
-        """Her futures sembolu icin funding event bilgisi, TEK istekte.
+    def get_funding_history(self, symbol: str = None, start_ms: int = None,
+                            limit: int = 1000) -> list:
+        """SETTLE OLMUS funding olaylari, tum tahta, TEK istekte.
 
-        ADIMLAR:
-          1. self._backoff.call(self._client.futures_mark_price) cagir -
-             PARAMETRESIZ. Parametresiz cagrilinca tum tahtayi (~875 kayit)
-             tek listede donduruyor, sembol basina ayri istek YOK.
-          2. Bos bir sozluk ac. Donen her kayit icin:
-             - entry.get("symbol") oku; alan yoksa ya da bos string ise o kaydi ATLA
-             - entry.get("nextFundingTime") oku; alan yoksa ya da bos string ise o kaydi ATLA
-             - entry.get("lastFundingRate") oku; alan yoksa ya da bos string ise o kaydi ATLA
-             - entry.get("markPrice") oku; alan yoksa ya da bos string ise o kaydi ATLA
-             - nextFundingTime_ms = int(entry["nextFundingTime"]) donusumunden sonra
-               datetime.utcfromtimestamp(nextFundingTime_ms/1000) ile naive utc datetime olustur
-             - Decimal(str(lastFundingRate)) ve Decimal(str(markPrice)) donusumu yap
-             - results[entry["symbol"]] = (naive_utc_datetime, Decimal(lastFundingRate), Decimal(markPrice))
-          3. Sozlugu don.
+        `GET /fapi/v1/fundingRate` sembolsuz cagrildiginda butun tahtanin en
+        son gerceklesen funding kayitlarini dondurur: her satirda gercekten
+        odenmis `fundingRate`, odendigi an `fundingTime` ve o andaki
+        `markPrice`. limit=1000 ile ~590 sembol ve son birkac saatin
+        settlement'lari tek istege sigiyor.
+
+        BURASI BIR HATANIN YERIYDI. Onceki surum premiumIndex
+        (`futures_mark_price`) cagirip `lastFundingRate` degerini
+        `nextFundingTime` ile eslestiriyordu. Ikisi de yanlisti:
+
+          * `nextFundingTime` GELECEKTEKI settlement'in zamani, gecmis bir
+            olayin degil. Kayit `(symbol, funding_time)` ile tekillestirildigi
+            icin, o settlement gerceklestiginde satir coktan yazilmisti ve
+            duzeltilemiyordu.
+          * `lastFundingRate` settle olmus bir oran DEGIL; yaklasan
+            settlement icin surekli guncellenen anlik tahmin. Olculdu:
+            21 Eylul 2026'da BTCUSDT icin premiumIndex 0.00004681 derken
+            son gerceklesen oran 0.00005485'ti.
+
+        Sonuc, her funding olayinin bir onceki donemin (hatta hic gerceklesmemis)
+        oraniyla kaydedilmesiydi -- sistematik, rastgele degil. Ve arastirma
+        tezgahi -- bu depoda degil, `C:/ajan/research/fetch_funding_history.py`
+        -- bastan beri bu endpoint'i kullandigi icin canli defter ile backtest
+        ayni tablo adi (`funding_rate_history`) ve ayni kolonlar altinda FARKLI
+        veri olcuyordu. Fark goze batmadigi icin de kimse fark etmedi.
+        Buraya premiumIndex geri gelmesin.
+
+        Funding artik cogu pariteda SAATLIK settle oluyor (8 saatlik degil),
+        yani bir saatin kayitlari tek basina ~590 satir tutabiliyor; limit
+        bu yuzden 1000.
+
+        `symbol` verilirse yalnizca o sembolun gecmisi gelir ve `start_ms` ile
+        geriye dogru sayfalanabilir -- saatlik toplayici bunlari kullanmaz,
+        `scripts/repair_funding_history.py` kullanir.
+
+        Donus: [(symbol, naive_utc_datetime, Decimal oran, Decimal mark)] --
+        eksik alanli kayitlar atlanir.
         """
-        mark_price = self._backoff.call(self._client.futures_mark_price)
-        results = {}
-        for entry in mark_price:
+        params = {"limit": limit}
+        if symbol:
+            params["symbol"] = symbol
+        if start_ms is not None:
+            params["startTime"] = int(start_ms)
+        rows = self._backoff.call(self._client.futures_funding_rate, **params)
+        results = []
+        for entry in rows:
             symbol = entry.get("symbol")
-            if not symbol:
+            funding_time = entry.get("fundingTime")
+            rate = entry.get("fundingRate")
+            mark = entry.get("markPrice")
+            if not symbol or not funding_time or rate in (None, "") or not mark:
                 continue
-            next_funding_time = entry.get("nextFundingTime")
-            if not next_funding_time:
-                continue
-            last_funding_rate = entry.get("lastFundingRate")
-            if not last_funding_rate:
-                continue
-            mark_price_value = entry.get("markPrice")
-            if not mark_price_value:
-                continue
-            
-            next_funding_time_ms = int(next_funding_time)
-            funding_time = datetime.utcfromtimestamp(next_funding_time_ms/1000).replace(tzinfo=None)
-            
-            results[symbol] = (
-                funding_time,
-                Decimal(str(last_funding_rate)),
-                Decimal(str(mark_price_value))
-            )
+            when = datetime.fromtimestamp(
+                int(funding_time) / 1000, tz=timezone.utc).replace(tzinfo=None)
+            results.append((symbol, when, Decimal(str(rate)), Decimal(str(mark))))
         return results
 
     def get_klines(self, symbol: str, interval: str, start_ms: int, end_ms: int) -> list:

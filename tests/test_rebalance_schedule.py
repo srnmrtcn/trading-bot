@@ -32,6 +32,29 @@ def test_is_rebalance_due_time_expired(db_session):
     assert is_rebalance_due(db_session, NOW + timedelta(days=REBALANCE_DAYS)) is True
 
 
+def test_is_rebalance_due_saniyelik_kayma_haftayi_atlatmaz(db_session):
+    """Uretimde yasanan tam durum.
+
+    Is 00:50'ye kurulu ama tek worker'da 00:40'taki bar isinin arkasinda
+    kuyrukta bekliyor, yani her hafta FIILEN baska bir saniyede kosuyor ve
+    as_of olarak o ani yaziyor. 17 Eylul'de 00:52:46'da kostu. Ertesi hafta
+    barlar birkac saniye erken biterse is 00:52:20'de kosar: fark 7 gunun
+    26 saniye ALTINDA kalir, rebalance "sirasi gelmedi" der ve defter bir
+    hafta daha kipirdamaz -- ustelik o dal log yazmadigi icin sessizce.
+
+    Haftalik denge bir GUN kurali, saniye kurali degil.
+    """
+    record_snapshot(db_session, datetime(2026, 9, 17, 0, 52, 46), Decimal(10000), 0, 0)
+    assert is_rebalance_due(db_session, datetime(2026, 9, 24, 0, 52, 20)) is True
+
+
+def test_is_rebalance_due_ayni_gun_ikinci_kez_tetiklenmez(db_session):
+    """Gun sinirina yuvarlamak ters yone kacmasin: ayni gun ikinci kez
+    kosan bir is defteri yeniden kurmamali."""
+    record_snapshot(db_session, datetime(2026, 9, 17, 0, 52, 46), Decimal(10000), 0, 0)
+    assert is_rebalance_due(db_session, datetime(2026, 9, 17, 23, 59, 59)) is False
+
+
 def test_load_daily_bars_group_by_symbol(db_session):
     _ekle(db_session, 'AAAUSDT', 5)
     _ekle(db_session, 'BBBUSDT', 5)

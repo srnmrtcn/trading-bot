@@ -343,7 +343,15 @@ def run_portfolio_rebalance_job(session_factory, now: datetime = None) -> None:
                 result.universe, result.equity, result.collapses,
             )
         elif result.reason == "not_due":
-            logger.debug("Portfolio rebalance not due yet")
+            # INFO, not debug. This is the answer six days out of seven, and
+            # at debug level it made the book's only job produce no output at
+            # all on those days -- a healthy wait and a dead job read exactly
+            # the same from outside. The position count is the proof of life.
+            logger.info(
+                "Portfolio rebalance not due: %d positions held, equity %s, "
+                "next rebalance %s",
+                result.held, result.equity, result.next_due,
+            )
         else:
             # Due, and could not act. This is the failure that hides: the job
             # runs, returns in a second, exits zero, and the book never opens.

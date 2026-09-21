@@ -70,7 +70,13 @@ def record_open(session, symbol: str, direction: str, entry_price, size, now: da
     """
     Yeni bir PortfolioPosition satiri ekler ve DONDURUR.
     Alanlar: strategy_version=STRATEGY_VERSION, symbol, direction, entry_price, position_size=size, opened_at=now, status='open'. Diger alanlar (exit_price, closed_at, gross_pnl, fee_cost, funding_cost, realized_pnl) DOKUNULMAZ, NULL kalir.
-    session.add + session.commit yapilir.
+
+    COMMIT ETMEZ, yalnizca flush eder. Bir rebalance bir dizi kapanis ve
+    acilistan olusur ve bu dizi BOLUNEMEZ: her adimi ayri ayri commit etmek,
+    surec aradan cekildiginde yarim bir defter birakir -- ustelik snapshot
+    yazilamadigi icin `is_rebalance_due` hala "sirasi geldi" der ve ertesi gun
+    yarim defterin ustune bir defter daha kurulur. Commit'i `run_rebalance`
+    sonda bir kez atar.
     """
     position = PortfolioPosition(
         strategy_version=STRATEGY_VERSION,
@@ -82,7 +88,7 @@ def record_open(session, symbol: str, direction: str, entry_price, size, now: da
         status="open",
     )
     session.add(position)
-    session.commit()
+    session.flush()
     return position
 
 def close_position(session, position, exit_price, funding_events: list, now: datetime) -> Decimal:
@@ -99,8 +105,10 @@ def close_position(session, position, exit_price, funding_events: list, now: dat
       position.fee_cost = fee
       position.funding_cost = funding
       position.realized_pnl = gross - fee - funding
-      session.commit()
+      session.flush()
       return position.realized_pnl
+
+    COMMIT ETMEZ -- gerekcesi record_open'daki ile ayni: rebalance bolunemez.
     """
     gross = position_pnl(position.direction, position.entry_price, exit_price, position.position_size)
     fee = trading_costs.round_trip_cost(position.position_size, position.entry_price, exit_price)
@@ -112,5 +120,5 @@ def close_position(session, position, exit_price, funding_events: list, now: dat
     position.fee_cost = fee
     position.funding_cost = funding
     position.realized_pnl = gross - fee - funding
-    session.commit()
+    session.flush()
     return position.realized_pnl

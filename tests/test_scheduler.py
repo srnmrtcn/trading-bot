@@ -30,8 +30,8 @@ class _FakeBinanceClient:
     def get_funding_rates(self):
         return {}
 
-    def get_funding_events(self):
-        return {}
+    def get_funding_history(self):
+        return []
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.symbols_requested.append(symbol)
@@ -51,8 +51,8 @@ class _PartiallyFailingBinanceClient:
     def get_funding_rates(self):
         return {}
 
-    def get_funding_events(self):
-        return {}
+    def get_funding_history(self):
+        return []
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.symbols_requested.append(symbol)
@@ -279,8 +279,8 @@ class _GapServingClient:
     def get_funding_rates(self):
         return {}
 
-    def get_funding_events(self):
-        return {}
+    def get_funding_history(self):
+        return []
 
     def get_klines(self, symbol, timeframe, start_ms, end_ms):
         self.calls.append({"start_ms": start_ms, "end_ms": end_ms})

@@ -74,19 +74,34 @@ def refresh_funding_rates(session, binance_client, now: datetime = None) -> Fund
     return FundingRefreshResult(updated=updated, missing=missing)
 
 
-def record_funding_event(session, symbol: str, funding_time: datetime, funding_rate: Decimal, mark_price: Decimal) -> bool:
+def upsert_funding_event(session, symbol: str, funding_time: datetime,
+                         funding_rate: Decimal, mark_price: Decimal) -> bool:
+    """Bir settlement olayini yaz ya da DUZELT. COMMIT ETMEZ.
+
+    Duzeltebilmesi sart. Onceki surum var olan satiri gorup dokunmadan
+    donuyordu; yanlis oranla erkenden yazilmis bir satir bu yuzden kalici
+    hale geliyordu. Ayni (symbol, funding_time) icin farkli bir oran gelmesi
+    normaldir -- veri kaynagi duzelmis ya da eksik bir kayit geri doldurulmus
+    olabilir -- ve son soz her zaman borsanin gerceklesmis kaydinindir.
+
+    Degisiklik yazildiysa True doner (yeni satir ya da duzeltme), satir zaten
+    aynıysa False.
     """
-    Ayni (symbol, funding_time) icin FundingRateHistory satiri zaten varsa hicbir sey yapmaz ve False doner. Yoksa satiri session'a EKLER ve True doner. COMMIT ETMEZ - cagiran topluca commit eder.
-    """
-    existing = session.query(FundingRateHistory).filter_by(symbol=symbol, funding_time=funding_time).first()
+    existing = session.query(FundingRateHistory).filter_by(
+        symbol=symbol, funding_time=funding_time).first()
     if existing is not None:
-        return False
-    
+        if (existing.funding_rate == funding_rate
+                and existing.mark_price == mark_price):
+            return False
+        existing.funding_rate = funding_rate
+        existing.mark_price = mark_price
+        return True
+
     session.add(FundingRateHistory(
         symbol=symbol,
         funding_time=funding_time,
         funding_rate=funding_rate,
-        mark_price=mark_price
+        mark_price=mark_price,
     ))
     return True
 
@@ -105,31 +120,42 @@ def funding_events_between(session, symbol: str, start: datetime, end: datetime)
 
 
 def refresh_funding_history(session, binance_client, now: datetime = None) -> int:
-    """
-    now verilmezse utc_now(). binance_client.get_funding_events() cagrilir; donen sozluk {symbol: (funding_time, funding_rate, mark_price)}. Symbol tablosunda has_futures_contract == True olan her sembol icin feed'deki kayit record_funding_event ile yazilir. Feed'de olmayan sembol atlanir. funding_time ya da mark_price None olan kayit atlanir. Sonda session.commit(); YENI yazilan satir sayisi doner. Hatalar YUKARI YAYILIR - cagiran saatlik job kendi try/except'i ile izole eder.
-    """
-    if now is None:
-        now = utc_now()
+    """Gerceklesmis funding olaylarini tahtadan alip kaydeder.
 
-    events = binance_client.get_funding_events()
-    
-    new_count = 0
-    
-    symbols = session.query(Symbol).filter(Symbol.has_futures_contract == True).all()
-    
-    for symbol in symbols:
-        event_data = events.get(symbol.symbol)
-        if event_data is None:
+    binance_client.get_funding_history() TEK istekte butun tahtanin son
+    settlement'larini donduruyor. Futures kontrati olan sembollerin kayitlari
+    upsert edilir; tahtada olup bizde olmayan sembol atlanir.
+
+    Yazilan/duzeltilen satir sayisi doner. Hatalar YUKARI YAYILIR - cagiran
+    saatlik job kendi try/except'i ile izole eder.
+
+    Kacan olay kalici olur: bu cagri yalnizca son birkac saatlik pencereyi
+    gorur, saatlik is bir kez atlanirsa o saatin olaylari bir daha gelmez.
+    Sembol bazli geri doldurma `scripts/repair_funding_history.py` isidir --
+    A altsisteminin doldurulamayan mum bosluklarini tolere etmesiyle ayni
+    politika.
+
+    `now` kullanilmiyor: zamani artik borsa soyluyor, biz degil. Imzada
+    duruyor cunku saatlik isin butun adimlari ayni imzayi tasiyor ve zamanin
+    disaridan verilebilmesi testlerin tek tutamagi.
+    """
+    events = binance_client.get_funding_history()
+
+    bizim = {
+        row.symbol for row in
+        session.query(Symbol.symbol).filter(Symbol.has_futures_contract == True).all()
+    }
+
+    yazilan = 0
+    for symbol, funding_time, funding_rate, mark_price in events:
+        if symbol not in bizim:
             continue
-            
-        funding_time, funding_rate, mark_price = event_data
-        
-        # None kontrolü
         if funding_time is None or funding_rate is None or mark_price is None:
             continue
-            
-        if record_funding_event(session, symbol.symbol, funding_time, funding_rate, mark_price):
-            new_count += 1
-    
+        if upsert_funding_event(session, symbol, funding_time, funding_rate, mark_price):
+            yazilan += 1
+
     session.commit()
-    return new_count
+    logger.info("Funding history refreshed: %d events written or corrected "
+                "from %d board rows", yazilan, len(events))
+    return yazilan

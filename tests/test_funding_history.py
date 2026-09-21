@@ -3,30 +3,51 @@ from decimal import Decimal
 from datetime import datetime
 
 from src.db.models import FundingRateHistory, Symbol
-from src.funding_collector import record_funding_event, funding_events_between, refresh_funding_history
+from src.funding_collector import upsert_funding_event, funding_events_between, refresh_funding_history
 
 
-def test_record_funding_event_inserts_a_new_row(db_session):
-    yazildi = record_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+def test_upsert_funding_event_inserts_a_new_row(db_session):
+    yazildi = upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
                                    Decimal('0.0001'), Decimal('50000'))
     db_session.commit()
     assert yazildi is True
     assert db_session.query(FundingRateHistory).count() == 1
 
 
-def test_record_funding_event_returns_false_on_duplicate(db_session):
-    record_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+def test_upsert_funding_event_yanlis_orani_duzeltir(db_session):
+    """Bu testin var olma sebebi bir uretim hatasi.
+
+    Onceki surum var olan satiri gorup DOKUNMADAN donuyordu. Toplayici da
+    settlement'i onceden ve yanlis oranla yaziyordu; duzeltemedigi icin hata
+    kalici hale geliyordu. Son sozu borsanin gerceklesmis kaydi soyler.
+    """
+    upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
                          Decimal('0.0001'), Decimal('50000'))
     db_session.commit()
-    yazildi = record_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
-                                    Decimal('0.0002'), Decimal('50100'))
+
+    duzeltildi = upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+                                      Decimal('0.0002'), Decimal('50100'))
     db_session.commit()
+
+    assert duzeltildi is True
+    assert db_session.query(FundingRateHistory).count() == 1
+    satir = db_session.query(FundingRateHistory).one()
+    assert satir.funding_rate == Decimal('0.0002')
+    assert satir.mark_price == Decimal('50100')
+
+
+def test_upsert_funding_event_ayni_veriyi_yeniden_yazmaz(db_session):
+    upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+                         Decimal('0.0001'), Decimal('50000'))
+    db_session.commit()
+    yazildi = upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+                                   Decimal('0.0001'), Decimal('50000'))
     assert yazildi is False
     assert db_session.query(FundingRateHistory).count() == 1
 
 
-def test_record_funding_event_does_not_commit(db_session):
-    record_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
+def test_upsert_funding_event_does_not_commit(db_session):
+    upsert_funding_event(db_session, 'BTCUSDT', datetime(2026, 1, 1, 8),
                          Decimal('0.0001'), Decimal('50000'))
     db_session.rollback()
     assert db_session.query(FundingRateHistory).count() == 0
@@ -108,11 +129,11 @@ def test_refresh_funding_history_inserts_two_records_for_two_symbols(db_session)
     db_session.commit()
 
     class MockBinanceClient:
-        def get_funding_events(self):
-            return {
-                'BTCUSDT': (datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000')),
-                'ETHUSDT': (datetime(2026, 1, 1, 8), Decimal('0.0002'), Decimal('3000'))
-            }
+        def get_funding_history(self):
+            return [
+                ('BTCUSDT', datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000')),
+                ('ETHUSDT', datetime(2026, 1, 1, 8), Decimal('0.0002'), Decimal('3000')),
+            ]
 
     count = refresh_funding_history(db_session, MockBinanceClient(), datetime(2026, 1, 1, 8))
     assert count == 2
@@ -124,10 +145,8 @@ def test_refresh_funding_history_returns_zero_for_duplicate_events(db_session):
     db_session.commit()
 
     class MockBinanceClient:
-        def get_funding_events(self):
-            return {
-                'BTCUSDT': (datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000'))
-            }
+        def get_funding_history(self):
+            return [('BTCUSDT', datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000'))]
 
     refresh_funding_history(db_session, MockBinanceClient(), datetime(2026, 1, 1, 8))
     count = refresh_funding_history(db_session, MockBinanceClient(), datetime(2026, 1, 1, 8))
@@ -140,10 +159,8 @@ def test_refresh_funding_history_skips_non_futures_contracts(db_session):
     db_session.commit()
 
     class MockBinanceClient:
-        def get_funding_events(self):
-            return {
-                'BTCUSDT': (datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000'))
-            }
+        def get_funding_history(self):
+            return [('BTCUSDT', datetime(2026, 1, 1, 8), Decimal('0.0001'), Decimal('50000'))]
 
     count = refresh_funding_history(db_session, MockBinanceClient(), datetime(2026, 1, 1, 8))
     assert count == 0
@@ -155,10 +172,8 @@ def test_refresh_funding_history_skips_none_values(db_session):
     db_session.commit()
 
     class MockBinanceClient:
-        def get_funding_events(self):
-            return {
-                'BTCUSDT': (datetime(2026, 1, 1, 8), None, Decimal('50000'))
-            }
+        def get_funding_history(self):
+            return [('BTCUSDT', datetime(2026, 1, 1, 8), None, Decimal('50000'))]
 
     count = refresh_funding_history(db_session, MockBinanceClient(), datetime(2026, 1, 1, 8))
     assert count == 0

@@ -6,13 +6,16 @@ from src.binance_client import BinanceClient
 
 
 class _FakeClient:
-    def __init__(self, exchange_info=None, kline_pages=None, futures_exchange_info=None, mark_price=None):
+    def __init__(self, exchange_info=None, kline_pages=None, futures_exchange_info=None,
+                 mark_price=None, funding_history=None):
         self._exchange_info = exchange_info or {"symbols": []}
         self._kline_pages = kline_pages or []
         self._futures_exchange_info = futures_exchange_info or {"symbols": []}
         self._mark_price = mark_price or []
+        self._funding_history = funding_history or []
         self._page_index = 0
         self.get_klines_calls = []
+        self.cagrilan = []
 
     def get_exchange_info(self):
         return self._exchange_info
@@ -21,7 +24,13 @@ class _FakeClient:
         return self._futures_exchange_info
 
     def futures_mark_price(self):
+        self.cagrilan.append("futures_mark_price")
         return self._mark_price
+
+    def futures_funding_rate(self, **params):
+        self.cagrilan.append("futures_funding_rate")
+        self.funding_params = params
+        return self._funding_history
 
     def get_klines(self, symbol, interval, startTime, endTime, limit):
         self.get_klines_calls.append({"startTime": startTime, "endTime": endTime})
@@ -122,45 +131,55 @@ def test_get_funding_rates_skips_entries_without_a_funding_rate():
     assert client.get_funding_rates() == {"BTCUSDT": Decimal("0.00005955")}
 
 
-def test_get_funding_events_returns_datetime_and_decimals_keyed_by_symbol():
-    fake = _FakeClient(mark_price=[
-        {"symbol": "BTCUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},
-        {"symbol": "ETHUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "-0.00012000", "markPrice": "3000.00"},
+def test_get_funding_history_gerceklesmis_settlement_endpointini_kullanir():
+    """Premium index DEGIL, funding-rate gecmisi.
+
+    Eski surum premiumIndex'ten `lastFundingRate` + `nextFundingTime` okuyordu:
+    oran settle olmamis bir tahmin, zaman ise GELECEKTEKI bir settlement.
+    Bu test kaynagi civiliyor -- oraya geri donen bir degisiklik burada duser.
+    """
+    fake = _FakeClient(funding_history=[
+        {"symbol": "BTCUSDT", "fundingTime": 1735689600000,
+         "fundingRate": "0.00005485", "markPrice": "79636.12"},
+        {"symbol": "ETHUSDT", "fundingTime": 1735689600000,
+         "fundingRate": "-0.00012000", "markPrice": "3000.00"},
     ])
     client = BinanceClient(client=fake)
 
-    events = client.get_funding_events()
+    events = client.get_funding_history()
 
-    assert events == {
-        "BTCUSDT": (
-            datetime(2025, 1, 1, 0, 0, 0),
-            Decimal("0.00005955"),
-            Decimal("79636.12")
-        ),
-        "ETHUSDT": (
-            datetime(2025, 1, 1, 0, 0, 0),
-            Decimal("-0.00012000"),
-            Decimal("3000.00")
-        )
-    }
-    # Parsed via str(), never float, so the stored rate is exact.
-    assert isinstance(events["BTCUSDT"][1], Decimal)
-    assert isinstance(events["BTCUSDT"][2], Decimal)
+    assert "futures_funding_rate" in fake.cagrilan
+    assert "futures_mark_price" not in fake.cagrilan
+    assert events == [
+        ("BTCUSDT", datetime(2025, 1, 1, 0, 0, 0), Decimal("0.00005485"), Decimal("79636.12")),
+        ("ETHUSDT", datetime(2025, 1, 1, 0, 0, 0), Decimal("-0.00012000"), Decimal("3000.00")),
+    ]
+    # str() uzerinden Decimal: float donusumu oranin son hanelerini yer.
+    assert isinstance(events[0][2], Decimal)
+    assert isinstance(events[0][3], Decimal)
 
 
-def test_get_funding_events_skips_entries_without_required_fields():
-    fake = _FakeClient(mark_price=[
-        {"symbol": "BTCUSDT", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},
-        {"symbol": "WEIRDUSDT", "markPrice": "1.0"},  # missing nextFundingTime and lastFundingRate
-        {"symbol": "EMPTYUSDT", "nextFundingTime": "", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},  # empty nextFundingTime
-        {"symbol": "", "nextFundingTime": "1735689600000", "lastFundingRate": "0.00005955", "markPrice": "79636.12"},  # empty symbol
+def test_get_funding_history_eksik_alanli_kayitlari_atlar():
+    fake = _FakeClient(funding_history=[
+        {"symbol": "BTCUSDT", "fundingTime": 1735689600000,
+         "fundingRate": "0.00005485", "markPrice": "79636.12"},
+        {"symbol": "WEIRDUSDT", "markPrice": "1.0"},
+        {"symbol": "EMPTYUSDT", "fundingTime": "", "fundingRate": "0.0001", "markPrice": "5"},
+        {"symbol": "", "fundingTime": 1735689600000, "fundingRate": "0.0001", "markPrice": "5"},
     ])
     client = BinanceClient(client=fake)
 
-    assert client.get_funding_events() == {
-        "BTCUSDT": (
-            datetime(2025, 1, 1, 0, 0, 0),
-            Decimal("0.00005955"),
-            Decimal("79636.12")
-        )
-    }
+    assert client.get_funding_history() == [
+        ("BTCUSDT", datetime(2025, 1, 1, 0, 0, 0), Decimal("0.00005485"), Decimal("79636.12")),
+    ]
+
+
+def test_get_funding_history_sifir_orani_atmaz():
+    """0 gecerli bir funding oranidir; `not rate` ile elenirse veri kaybolur."""
+    fake = _FakeClient(funding_history=[
+        {"symbol": "BTCUSDT", "fundingTime": 1735689600000,
+         "fundingRate": "0", "markPrice": "79636.12"},
+    ])
+    assert BinanceClient(client=fake).get_funding_history() == [
+        ("BTCUSDT", datetime(2025, 1, 1, 0, 0, 0), Decimal("0"), Decimal("79636.12")),
+    ]

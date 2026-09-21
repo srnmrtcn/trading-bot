@@ -12,6 +12,9 @@ from src.db.models import (
     Scenario,
 )
 from src.portfolio.config import STRATEGY_VERSION
+# Iki ayri surum sabiti var ve ayni adi tasiyorlar: defterinki
+# portfolio.config'te, senaryo/paper tarafininki strategy_version'da.
+from src.strategy_version import STRATEGY_VERSION as SENARYO_SURUMU
 from src.timeutil import utc_now
 from src.web import create_app
 
@@ -66,12 +69,44 @@ def test_dashboard_shows_an_open_position(db_session):
         entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
         risk_amount=Decimal("100"), position_size=Decimal("10"),
         opened_at=datetime(2026, 1, 1), status="open",
+        strategy_version=SENARYO_SURUMU,
     ))
     db_session.commit()
 
     response = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD))
 
     assert "BTCUSDT" in response.get_data(as_text=True)
+
+
+def test_dashboard_eski_surumun_pozisyonunu_gostermez(db_session):
+    """Dashboard YALNIZCA yuruyen surumu gosterir.
+
+    Surum sabitini artirmanin butun anlami eski satirlarin silinmeden
+    okunmamasi. `dashboard_data` bu suzgeci hic uygulamiyordu -- yerel bir
+    `STRATEGY_VERSION = "v1"` sabiti tanimlanip hicbir sorguda kullanilmamisti.
+    Sonuc: guncel equity yeni surumden, acik pozisyonlar eskisinden geliyordu.
+    """
+    scenario = Scenario(
+        symbol="ESKIUSDT", direction="long",
+        entry_price=Decimal("100"), target_price=Decimal("110"), stop_price=Decimal("90"),
+        expected_return_pct=Decimal("0.1"), confidence_score=Decimal("0.7"),
+        created_at=datetime(2026, 1, 1), expires_at=datetime(2026, 1, 2), status="pending",
+        strategy_version="2020.01.cok-eski",
+    )
+    db_session.add(scenario)
+    db_session.commit()
+    db_session.add(PaperPosition(
+        scenario_id=scenario.id, symbol="ESKIUSDT", direction="long",
+        entry_price=Decimal("100"), stop_price=Decimal("90"), target_price=Decimal("110"),
+        risk_amount=Decimal("100"), position_size=Decimal("10"),
+        opened_at=datetime(2026, 1, 1), status="open",
+        strategy_version="2020.01.cok-eski",
+    ))
+    db_session.commit()
+
+    body = _client(db_session).get("/", auth=(AUTH_USER, AUTH_PASSWORD)).get_data(as_text=True)
+
+    assert "ESKIUSDT" not in body
 
 
 def test_dashboard_shows_empty_state_with_no_data(db_session):

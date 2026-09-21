@@ -75,6 +75,12 @@ class FetchLog(Base):
         Index("ix_fetch_log_symbol_timeframe_status_finished",
               "symbol", "timeframe", "status", "finished_at"),
         Index("ix_fetch_log_finished_at", "finished_at"),
+        # get_system_health artik "en yeni BASARILI satir" soruyor. Yalnizca
+        # finished_at indeksi bunu karsilamaz: uzun bir Binance kesintisinde
+        # sorgu, tabloya gunde ~10k satir girerken butun hata satirlarinin
+        # uzerinden geriye tarar -- ve /health'i platform probe'u birkac
+        # saniyede bir cagirir. Yani indeks tam olayin ortasinda gerekiyor.
+        Index("ix_fetch_log_status_finished", "status", "finished_at"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)

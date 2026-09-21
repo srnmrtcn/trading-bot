@@ -387,3 +387,58 @@ def test_adverse_move_yonu_dogru_okur():
     assert adverse_move('long', d(100), d(180)) == d("-0.8")  # yukseldi: lehe
     assert adverse_move('short', d(100), d(180)) == d("0.8")  # yukseldi: aleyhe
     assert adverse_move('short', d(100), d(20)) == d("-0.8")  # dustu: lehe
+
+
+def test_rebalance_yarida_cokerse_hicbir_sey_kalmaz(db_session, monkeypatch):
+    """Rebalance ya tamamen olur ya hic olmaz.
+
+    Eski surumde her kapanis ve her acilis AYRI commit ediyordu, snapshot ise
+    en sonda yaziliyordu. Surec aradan cekilirse defter yarim kaliyordu: bir
+    kismi kapanmis, bir kismi acilmis, snapshot yok. Ve snapshot olmadigi icin
+    `is_rebalance_due` hala "sirasi geldi" diyordu -- ertesi gun yarim defterin
+    ustune bir defter daha kurulup komisyon iki kere odeniyordu.
+    """
+    import pytest
+    from src.db.models import PortfolioSnapshot
+    from src.portfolio import rebalancer as rb
+
+    _evren(db_session)
+    run_rebalance(db_session, NOW)
+    onceki_defter = {(p.symbol, p.direction) for p in open_positions(db_session)}
+    onceki_snapshot = db_session.query(PortfolioSnapshot).count()
+    assert onceki_defter, "on kosul: ilk defter kurulmus olmali"
+
+    # Devir olmasi icin en guclu long ismini cokert: siralamadan dusmeli,
+    # yerine baskasi girmeli. (Komsu testteki kurulumun aynisi.)
+    _gunler_ekle(db_session, BASLANGIC + timedelta(days=70), REBALANCE_DAYS + 1)
+    en_iyi = sorted(s for s, d in onceki_defter if d == 'long')[0]
+    fiyat = (db_session.query(FuturesDailyKline)
+             .filter(FuturesDailyKline.symbol == en_iyi)
+             .order_by(FuturesDailyKline.open_time.desc()).first().close)
+    for g in range(REBALANCE_DAYS + 1):
+        satir = (db_session.query(FuturesDailyKline)
+                 .filter(FuturesDailyKline.symbol == en_iyi,
+                         FuturesDailyKline.open_time
+                         == BASLANGIC + timedelta(days=70 + g)).first())
+        if satir is not None:
+            fiyat = fiyat * Decimal("0.90")
+            satir.close = fiyat
+            satir.volume = Decimal(60000000) / fiyat
+    db_session.commit()
+
+    cagri = {"n": 0}
+    orijinal = rb.record_open
+
+    def yarida_olen(*args, **kwargs):
+        cagri["n"] += 1
+        if cagri["n"] == 2:
+            raise RuntimeError("surec oldu")
+        return orijinal(*args, **kwargs)
+
+    monkeypatch.setattr(rb, "record_open", yarida_olen)
+
+    with pytest.raises(RuntimeError):
+        run_rebalance(db_session, NOW + timedelta(days=REBALANCE_DAYS))
+
+    assert {(p.symbol, p.direction) for p in open_positions(db_session)} == onceki_defter
+    assert db_session.query(PortfolioSnapshot).count() == onceki_snapshot

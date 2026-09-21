@@ -182,3 +182,78 @@ def test_get_recent_scenarios_returns_newest_first_and_respects_limit(db_session
     scenarios = get_recent_scenarios(db_session, limit=2)
 
     assert [scenario.symbol for scenario in scenarios] == ["SYM2", "SYM1"]
+
+def _hatali_log(finished_at):
+    return FetchLog(
+        symbol="BTCUSDT", timeframe="1h", status="error",
+        started_at=finished_at, finished_at=finished_at,
+        error_message="APIError: -1003",
+    )
+
+
+def test_health_yalnizca_hata_satiri_varken_saglikli_demez(db_session):
+    """Canlilik ile veri sagligi ayri sorular.
+
+    Eski sorgu en yeni `finished_at` satirini aliyor, `status`a bakmiyordu.
+    Binance her istegi reddetse bile dongu donmeye ve her sembol icin satir
+    yazmaya devam eder -- hepsi hata. Servis "healthy" gorunur, veri akmaz.
+    Bu test o suzgeci civiliyor: kaldirilirsa burada duser.
+    """
+    simdi = datetime(2026, 1, 1, 12, 0)
+    db_session.add(_log(simdi - timedelta(hours=9)))     # eski ama basarili
+    db_session.add(_hatali_log(simdi - timedelta(minutes=2)))   # yeni ama hata
+    db_session.commit()
+
+    saglik = get_system_health(db_session, now=simdi)
+
+    assert saglik.status == "stopped"
+    assert saglik.last_activity == simdi - timedelta(hours=9)
+
+
+def test_health_hicbir_basarili_satir_yokken_durdu_der(db_session):
+    simdi = datetime(2026, 1, 1, 12, 0)
+    db_session.add(_hatali_log(simdi - timedelta(minutes=1)))
+    db_session.commit()
+
+    saglik = get_system_health(db_session, now=simdi)
+
+    assert saglik.status == "stopped"
+    assert saglik.last_activity is None
+
+
+def test_equity_grafigi_eski_surumun_pozisyonlarini_saymaz(db_session):
+    """Guncel equity `paper_equity` uzerinden zaten surum suzuyordu; grafik
+    suzmuyordu. Ikisi farkli populasyondan gelince rakam ile egri birbirini
+    tutmuyordu."""
+    db_session.add(_scenario(1))
+    db_session.add(_scenario(2, symbol="ESKIUSDT"))
+    db_session.commit()
+    yeni = _closed_position(1, "BTCUSDT", datetime(2026, 1, 2), Decimal("10500"))
+    eski = _closed_position(2, "ESKIUSDT", datetime(2026, 1, 3), Decimal("99999"))
+    eski.strategy_version = "2020.01.cok-eski"
+    db_session.add(yeni)
+    db_session.add(eski)
+    db_session.commit()
+
+    ozet = get_equity_summary(db_session)
+
+    assert [equity for _, equity in ozet.history] == [Decimal("10500")]
+
+
+def test_equity_grafigi_equity_after_bos_satiri_atlar(db_session):
+    """equity_after NULL olan kapanmis tek bir satir sparkline'da float(None)
+    ile patliyor ve tum dashboard'i hata sayfasina dusuruyordu."""
+    db_session.add(_scenario(1))
+    db_session.add(_scenario(2, symbol="ETHUSDT"))
+    db_session.commit()
+    saglam = _closed_position(1, "BTCUSDT", datetime(2026, 1, 2), Decimal("10500"))
+    bozuk = _closed_position(2, "ETHUSDT", datetime(2026, 1, 3), Decimal("10600"))
+    bozuk.equity_after = None
+    db_session.add(saglam)
+    db_session.add(bozuk)
+    db_session.commit()
+
+    ozet = get_equity_summary(db_session)
+
+    assert [equity for _, equity in ozet.history] == [Decimal("10500")]
+    assert equity_sparkline_points(ozet.history) is None  # tek nokta, cizgi yok
