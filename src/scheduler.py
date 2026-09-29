@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.backfill import run_gap_backfill
+from src.config import scenario_path_enabled
 from src.btc_regime import BTC_SYMBOL, REGIME_TIMEFRAME
 from src.db.models import Symbol
 from src.fetch_log import record_run
@@ -143,7 +144,56 @@ def refresh_regime_source(session, binance_client, now: datetime) -> None:
         logger.error("BTC regime source refresh failed: %s", result.error)
 
 
-def run_timeframe_job(session_factory, binance_client, timeframe: str, now: datetime = None) -> None:
+def run_book_only_job(session_factory, binance_client, timeframe: str, now: datetime = None) -> None:
+    """Senaryo yolu kapaliyken saatlik isin yerine gecer.
+
+    Defterin saatlik ihtiyaci yalnizca funding gecmisi (kapanan pozisyon
+    funding'ini ondan oder). 1h spot mum, bosluk taramasi, BTC rejimi,
+    senaryo, ogrenme ve paper yalnizca olu yolu besliyordu; hicbiri calismaz.
+    Gunluk spot mum isi de ayni sebeple bos doner.
+
+    Tek incelik /health: saglik fetch_log'daki en yeni BASARILI satirdan
+    olculuyor ve o satirlari yazan mum dongusu artik yok. Bu yuzden funding
+    adimi kendi satirini yaziyor -- basarisizsa status="error", ki /health
+    bir funding kesintisini "healthy" diye gizlemesin.
+    """
+    if timeframe != "1h":
+        logger.info("%s spot kline job skipped: scenario path disabled", timeframe)
+        return
+    session = session_factory()
+    try:
+        end = now if now is not None else utc_now()
+        started_at = utc_now()
+        try:
+            refresh_funding_rates(session, binance_client, now=end)
+        except Exception:
+            logger.exception("Funding rate refresh failed (book-only job)")
+            session.rollback()
+        hata = None
+        yazilan = 0
+        try:
+            from src.funding_collector import refresh_funding_history
+            yazilan = refresh_funding_history(session, binance_client, now=end)
+        except Exception as exc:
+            hata = f"{type(exc).__name__}: {exc}"
+            logger.exception("Funding history refresh failed (book-only job)")
+            session.rollback()
+        record_run(session, "FUNDING", "funding",
+                   status="error" if hata else "success",
+                   started_at=started_at, finished_at=utc_now(), error_message=hata)
+        logger.info("1h job finished (book only, scenario path disabled): "
+                    "%d funding events written or corrected%s",
+                    yazilan, f", ERROR {hata}" if hata else "")
+    finally:
+        session.close()
+
+
+def run_timeframe_job(session_factory, binance_client, timeframe: str, now: datetime = None,
+                      scenario_path: bool | None = None) -> None:
+    if scenario_path is None:
+        scenario_path = scenario_path_enabled()
+    if not scenario_path:
+        return run_book_only_job(session_factory, binance_client, timeframe, now=now)
     session = session_factory()
     try:
         end = now if now is not None else utc_now()

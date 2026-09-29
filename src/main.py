@@ -7,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 
 from src.backfill import run_initial_backfill
 from src.binance_client import BinanceClient
-from src.config import get_basic_auth_credentials, get_database_url
+from src.config import scenario_path_enabled, get_basic_auth_credentials, get_database_url
 from src.db.models import Symbol
 from src.db.session import create_all_tables, make_engine, make_session_factory
 from src.scheduler import build_scheduler
@@ -82,7 +82,12 @@ def startup():
             session.rollback()
 
         symbols = [row.symbol for row in session.query(Symbol).filter(Symbol.is_active == True).all()]  # noqa: E712
-        pending = find_pending_backfills(session, symbols, TIMEFRAMES)
+        # Spot 1h/1d mum yalnizca senaryo yolunu besliyor; yol kapaliyken acilista
+        # yuzlerce sembolu geri doldurmak portun acilmasini bosuna geciktirir.
+        timeframes = TIMEFRAMES if scenario_path_enabled() else []
+        if not timeframes:
+            logger.info("Scenario path disabled: skipping spot kline backfill")
+        pending = find_pending_backfills(session, symbols, timeframes)
         if pending:
             logger.info("Running initial backfill for %d symbol/timeframe pairs", len(pending))
             results = []
