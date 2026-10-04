@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-STRATEGY_VERSION = "2026.09.xsec-momentum-v1"
+# v2 (4 Eki 2026): kural ayni, defter sifirdan. v1 suresince muhasebe degisti
+# (funding gerceklesmis settlement'tan, rebalance gun sinirinda, tasinan isimler),
+# o yuzden v1 kaydi tek bir sistemin olcumu degil. v1 satirlari veritabaninda kalir.
+STRATEGY_VERSION = "2026.10.xsec-momentum-v2"
 
 # Ranked on each of these horizons; the percentile ranks are averaged. Two
 # years is 99 weekly observations, which cannot tell a 14-day lookback from a
@@ -51,7 +54,11 @@ LEG_EXPOSURE = Decimal("0.5")
 # A leg needs enough names for equal weighting to mean anything.
 MIN_UNIVERSE = 15
 
-STARTING_EQUITY = Decimal("10000")
+# 10.000 TL, 4 Eki 2026 Binance USDTTRY 49.14 kuruyla. Defter USDT ile tutulur;
+# TL karsiligi kur hareketiyle kayar, bu sabit yalnizca baslangic buyuklugu.
+# Not: bu boyutta isim basina ~14.5 USDT dusuyor. Binance'te cogu perp icin asgari
+# notional 5 USDT ama BTC 100, ETH 20 USDT; paper defter bu siniri uygulamiyor.
+STARTING_EQUITY = Decimal("203.50")
 
 # How many days of daily perpetual candles to keep refreshed. The book needs
 # the liquidity window plus the longest lookback plus the signal skip, and a

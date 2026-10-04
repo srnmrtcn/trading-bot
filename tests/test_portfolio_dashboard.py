@@ -65,10 +65,12 @@ def test_book_performance_kazanma_orani(db_session):
 
 
 def test_book_performance_getiri_yuzdesi(db_session):
-    _snapshot(db_session, 0, 12000)
+    # baslangic sermayesinden turetilir: sabit degisince test kirilmasin
+    hedef = STARTING_EQUITY * Decimal('1.2')
+    _snapshot(db_session, 0, hedef)
     db_session.commit()
     p = book_performance(db_session)
-    assert p.equity == Decimal(12000)
+    assert p.equity == hedef
     assert p.return_pct == Decimal(20)
 
 
